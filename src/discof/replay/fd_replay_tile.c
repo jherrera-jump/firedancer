@@ -160,6 +160,14 @@ struct fd_replay_tile {
   int has_identity_vote_rooted;
   int wait_for_vote_to_start_leader;
 
+  /* This flag is initialized based on a config parameter. If not
+     ULONG_MAX, additional checks are run at boot and replay is not
+     allowed to make progress until 80% of the cluster has voted for the
+     snapshot slot. */
+  ulong     wait_for_supermajority_at_slot;
+  int       done_waiting_for_supermajority;
+  fd_hash_t expected_bank_hash;
+
   ulong        reasm_seed;
   fd_reasm_t * reasm;
 
@@ -1110,7 +1118,7 @@ static inline int
 maybe_become_leader( fd_replay_tile_t *  ctx,
                      fd_stem_context_t * stem ) {
   FD_TEST( ctx->is_booted );
-  if( FD_LIKELY( ctx->next_leader_slot==ULONG_MAX || ctx->is_leader || (!ctx->has_identity_vote_rooted && ctx->wait_for_vote_to_start_leader) || ctx->replay_out->idx==ULONG_MAX ) ) return 0;
+  if( FD_LIKELY( ctx->next_leader_slot==ULONG_MAX || ctx->is_leader || (!ctx->has_identity_vote_rooted && ctx->wait_for_vote_to_start_leader) || ctx->replay_out->idx==ULONG_MAX || !ctx->done_waiting_for_supermajority ) ) return 0;
 
   FD_TEST( ctx->next_leader_slot>ctx->reset_slot );
   long now = fd_tickcount();
@@ -1443,6 +1451,17 @@ on_snapshot_message( fd_replay_tile_t *  ctx,
     }
 
     ulong snapshot_slot = fd_bank_slot_get( bank );
+  
+    if( FD_UNLIKELY( ctx->wait_for_supermajority_at_slot!=ULONG_MAX ) ) {
+      if( FD_UNLIKELY( ctx->wait_for_supermajority_at_slot!=snapshot_slot ) ) FD_LOG_ERR(( "wait_for_supermajority_at_slot=%lu does not match snapshot_slot=%lu", ctx->wait_for_supermajority_at_slot, snapshot_slot ));
+
+      if( FD_UNLIKELY( memcmp( ctx->expected_bank_hash.uc, ((fd_hash_t){ 0 }).uc, sizeof(fd_hash_t) ) && memcmp( ctx->expected_bank_hash.uc, fd_bank_bank_hash_get( bank ).uc, sizeof(fd_hash_t) ) ) ) {
+        FD_BASE58_ENCODE_32_BYTES( ctx->expected_bank_hash.uc, expected_bank_hash_cstr );
+        FD_BASE58_ENCODE_32_BYTES( fd_bank_bank_hash_get( bank ).uc, actual_bank_hash_cstr );
+        FD_LOG_ERR(( "expected_bank_hash=%s does not match actual_bank_hash=%s", expected_bank_hash_cstr, actual_bank_hash_cstr ));
+      }
+    }
+
     /* FIXME: This is a hack because the block id of the snapshot slot
        is not provided in the snapshot.  A possible solution is to get
        the block id of the snapshot slot from repair. */
@@ -1509,6 +1528,8 @@ on_snapshot_message( fd_replay_tile_t *  ctx,
     ctx->cluster_type = fd_bank_cluster_type_get( bank );
 
     maybe_verify_cluster_type( ctx );
+
+    /* wait for supermajority */
 
     return;
   }
@@ -1926,7 +1947,7 @@ after_credit( fd_replay_tile_t *  ctx,
               fd_stem_context_t * stem,
               int *               opt_poll_in,
               int *               charge_busy ) {
-  if( FD_UNLIKELY( !ctx->is_booted ) ) return;
+  if( FD_UNLIKELY( !ctx->is_booted || !ctx->done_waiting_for_supermajority ) ) return;
 
   if( FD_UNLIKELY( maybe_become_leader( ctx, stem ) ) ) {
     *charge_busy = 1;
@@ -2384,8 +2405,15 @@ returnable_frag( fd_replay_tile_t *  ctx,
         /* Implement replay plugin API here */
 
         switch( msg->kind ) {
-        case FD_TOWER_SLOT_CONFIRMED_OPTIMISTIC: break;
-        case FD_TOWER_SLOT_CONFIRMED_ROOTED:     break;
+          case FD_TOWER_SLOT_CONFIRMED_OPTIMISTIC: break;
+          case FD_TOWER_SLOT_CONFIRMED_SUPER: {
+            FD_TEST( msg->bank_idx!=ULONG_MAX );
+            if( FD_UNLIKELY( ctx->wait_for_supermajority_at_slot!=ULONG_MAX && !ctx->done_waiting_for_supermajority && msg->bank_idx==FD_REPLAY_BOOT_BANK_IDX ) ) {
+              ctx->done_waiting_for_supermajority = 1;
+            }
+            break;
+          }
+          case FD_TOWER_SLOT_CONFIRMED_ROOTED:     break;
         }
       }
       else if( FD_LIKELY( sig==FD_TOWER_SIG_SLOT_IGNORED   ) ) {
@@ -2627,7 +2655,10 @@ unprivileged_init( fd_topo_t *      topo,
   FD_TEST( ctx->vote_tracker );
 
   ctx->has_identity_vote_rooted = 0;
-  ctx->wait_for_vote_to_start_leader = tile->replay.wait_for_vote_to_start_leader;
+  ctx->wait_for_vote_to_start_leader  = tile->replay.wait_for_vote_to_start_leader && tile->replay.wait_for_supermajority_at_slot==ULONG_MAX;
+  ctx->wait_for_supermajority_at_slot = tile->replay.wait_for_supermajority_at_slot;
+  ctx->done_waiting_for_supermajority = tile->replay.wait_for_supermajority_at_slot==ULONG_MAX;
+  ctx->expected_bank_hash = tile->replay.expected_bank_hash;
 
   ctx->mleaders = fd_multi_epoch_leaders_join( fd_multi_epoch_leaders_new( ctx->mleaders_mem ) );
   FD_TEST( ctx->mleaders );

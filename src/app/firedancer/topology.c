@@ -1518,6 +1518,12 @@ fd_topo_configure_tile( fd_topo_tile_t * tile,
 
     tile->replay.expected_shred_version = config->consensus.expected_shred_version;
     tile->replay.wait_for_vote_to_start_leader = config->consensus.wait_for_vote_to_start_leader;
+    tile->replay.wait_for_supermajority_at_slot = config->consensus.wait_for_supermajority_at_slot;
+    if( strcmp( config->frankendancer.consensus.expected_bank_hash, "" ) ) {
+      fd_base58_decode_32( config->consensus.expected_bank_hash, tile->replay.expected_bank_hash.uc );
+    } else {
+      memset( tile->replay.expected_bank_hash.uc, 0, sizeof(tile->replay.expected_bank_hash.uc) );
+    }
 
     tile->replay.max_live_slots = config->firedancer.runtime.max_live_slots;
 
