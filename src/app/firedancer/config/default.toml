@@ -527,18 +527,19 @@ telemetry = true
     # deadlocked waiting on their votes to land.
     wait_for_vote_to_start_leader = true
 
-    # If nonzero, this should be set to the snapshot slot of the snapshot
-    # being used to boot during a cluster restart (i.e. a hard fork). If
-    # this slot doesn't match the snapshot slot, the client will fail to
-    # boot. The client will wait until a supermajority of stake is
-    # visible on gossip for that slot before attempting to make progress.
+    # If set to zero or some number smaller than the snapshot slot,
+    # this parameter is ignored. If set to a number larger than the
+    # snapshot slot, the client will fail to boot. The client will wait
+    # until a supermajority of stake is visible on gossip for the
+    # snapshot slot before attempting to make progress.
     wait_for_supermajority_at_slot = 0
 
-    # Ignored if wait_for_supermajority_at_slot is 0. If there is a hard
-    # fork, this parameter may be required to provide an expected bank
-    # hash to ensure the correct fork is being selected. If this is not
+    # Ignored if wait_for_supermajority_at_slot is set to zero or some
+    # number smaller than the snapshot slot. During a hard fork, this
+    # parameter may be required to provide an expected bank hash to
+    # ensure the correct fork is being selected. If this is not
     # provided, the bank hash is not checked. Otherwise, we require the
-    # bank at wait_for_supermajority_at_slot to have this hash.
+    # bank at the snapshot slot to have this hash.
     expected_bank_hash = ""
 
 # This section configures the "funk" account database.  Currently, funk
