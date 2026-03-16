@@ -154,6 +154,7 @@ struct fd_gui_peers_node {
   fd_pubkey_t vote_account;
   int         delinquent;
   ulong       stake;
+  ulong       prev_stake;
 
   uchar       country_code_idx;
   uint        city_name_idx;

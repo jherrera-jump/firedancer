@@ -1201,6 +1201,7 @@ fd_gui_printf_peer( fd_gui_t *    gui,
           char vote_account_base58[ FD_BASE58_ENCODED_32_SZ ];
           fd_base58_encode_32( gui->vote_account.vote_accounts[ vote_idxs[ i ] ].vote_account->uc, NULL, vote_account_base58 );
           jsonp_string( gui->http, "vote_account", vote_account_base58 );
+          jsonp_null( gui->http, "prev_stake" );
           jsonp_ulong_as_str( gui->http, "activated_stake", gui->vote_account.vote_accounts[ vote_idxs[ i ] ].activated_stake );
           jsonp_ulong( gui->http, "last_vote", gui->vote_account.vote_accounts[ vote_idxs[ i ] ].last_vote );
           jsonp_ulong( gui->http, "root_slot", gui->vote_account.vote_accounts[ vote_idxs[ i ] ].root_slot );
@@ -1296,6 +1297,8 @@ peers_printf_node( fd_gui_peers_ctx_t *  peers,
           char vote_account_base58[ FD_BASE58_ENCODED_32_SZ ];
           fd_base58_encode_32( peer->vote_account.uc, NULL, vote_account_base58 );
           jsonp_string( peers->http, "vote_account", vote_account_base58 );
+          if( FD_UNLIKELY( peer->prev_stake==ULONG_MAX ) ) jsonp_null      ( peers->http, "prev_stake" );
+          else                                             jsonp_ulong_as_str( peers->http, "prev_stake", peer->prev_stake );
           jsonp_ulong_as_str( peers->http, "activated_stake", fd_ulong_if( peer->stake==ULONG_MAX, 0UL, peer->stake ) );
           jsonp_ulong( peers->http, "last_vote", 0UL ); /* todo: deprecate */
           jsonp_ulong( peers->http, "epoch_credits", 0UL ); /* todo: deprecate */
@@ -2163,11 +2166,12 @@ fd_gui_printf_boot_progress( fd_gui_t * gui ) {
   jsonp_open_envelope( gui->http, "summary", "boot_progress" );
     jsonp_open_object( gui->http, "value" );
       switch( gui->summary.boot_progress.phase ) {
-        case FD_GUI_BOOT_PROGRESS_TYPE_JOINING_GOSSIP:               jsonp_string( gui->http, "phase", "joining_gossip" );        break;
-        case FD_GUI_BOOT_PROGRESS_TYPE_LOADING_FULL_SNAPSHOT:        jsonp_string( gui->http, "phase", "loading_full_snapshot" ); break;
+        case FD_GUI_BOOT_PROGRESS_TYPE_JOINING_GOSSIP:               jsonp_string( gui->http, "phase", "joining_gossip" );               break;
+        case FD_GUI_BOOT_PROGRESS_TYPE_LOADING_FULL_SNAPSHOT:        jsonp_string( gui->http, "phase", "loading_full_snapshot" );        break;
         case FD_GUI_BOOT_PROGRESS_TYPE_LOADING_INCREMENTAL_SNAPSHOT: jsonp_string( gui->http, "phase", "loading_incremental_snapshot" ); break;
-        case FD_GUI_BOOT_PROGRESS_TYPE_CATCHING_UP:                  jsonp_string( gui->http, "phase", "catching_up" );           break;
-        case FD_GUI_BOOT_PROGRESS_TYPE_RUNNING:                      jsonp_string( gui->http, "phase", "running" );               break;
+        case FD_GUI_BOOT_PROGRESS_TYPE_WAITING_FOR_SUPERMAJORITY:    jsonp_string( gui->http, "phase", "waiting_for_supermajority" );    break;
+        case FD_GUI_BOOT_PROGRESS_TYPE_CATCHING_UP:                  jsonp_string( gui->http, "phase", "catching_up" );                  break;
+        case FD_GUI_BOOT_PROGRESS_TYPE_RUNNING:                      jsonp_string( gui->http, "phase", "running" );                      break;
         default: FD_LOG_ERR(( "unknown phase %d", gui->summary.boot_progress.phase ));
       }
 
@@ -2202,6 +2206,26 @@ fd_gui_printf_boot_progress( fd_gui_t * gui ) {
     HANDLE_SNAPSHOT_STATE(full, FULL)
     HANDLE_SNAPSHOT_STATE(incremental, INCREMENTAL)
 #undef HANDLE_SNAPSHOT_STATE
+
+    if( FD_LIKELY( gui->summary.wfs_enabled ) ) {
+      jsonp_string    ( gui->http, "wait_for_supermajority_bank_hash",        gui->summary.wfs_bank_hash );
+      char shred_version_str[ 8 ];
+      FD_TEST( fd_cstr_printf_check( shred_version_str, sizeof(shred_version_str), NULL, "%hu", gui->summary.wfs_expected_shred_version ) );
+      jsonp_string    ( gui->http, "wait_for_supermajority_shred_version",    shred_version_str );
+      jsonp_ulong     ( gui->http, "wait_for_supermajority_attempt",          gui->summary.boot_progress.wfs_attempt );
+      jsonp_ulong     ( gui->http, "wait_for_supermajority_total_stake",      gui->summary.boot_progress.wfs_total_stake );
+      jsonp_ulong     ( gui->http, "wait_for_supermajority_connected_stake",  gui->summary.boot_progress.wfs_connected_stake );
+      jsonp_ulong     ( gui->http, "wait_for_supermajority_total_peers",      gui->summary.boot_progress.wfs_total_peers );
+      jsonp_ulong     ( gui->http, "wait_for_supermajority_connected_peers",  gui->summary.boot_progress.wfs_connected_peers );
+    } else {
+      jsonp_null( gui->http, "wait_for_supermajority_bank_hash" );
+      jsonp_null( gui->http, "wait_for_supermajority_shred_version" );
+      jsonp_null( gui->http, "wait_for_supermajority_attempt" );
+      jsonp_null( gui->http, "wait_for_supermajority_total_stake" );
+      jsonp_null( gui->http, "wait_for_supermajority_connected_stake" );
+      jsonp_null( gui->http, "wait_for_supermajority_total_peers" );
+      jsonp_null( gui->http, "wait_for_supermajority_connected_peers" );
+    }
 
     if( FD_LIKELY( gui->summary.boot_progress.phase>=FD_GUI_BOOT_PROGRESS_TYPE_CATCHING_UP ) ) jsonp_double( gui->http, "catching_up_elapsed_seconds",     (double)(gui->summary.boot_progress.catching_up_time_nanos - gui->summary.boot_progress.loading_snapshot[ FD_GUI_BOOT_PROGRESS_INCREMENTAL_SNAPSHOT_IDX ].sample_time_nanos) / 1e9 );
     else                                                                                       jsonp_null  ( gui->http, "catching_up_elapsed_seconds" );

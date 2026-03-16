@@ -711,6 +711,7 @@ fd_gui_peers_handle_gossip_update( fd_gui_peers_ctx_t *               peers,
           peer->has_vote_info = 0;
           peer->delinquent = 0;
           peer->stake = ULONG_MAX;
+          peer->prev_stake = ULONG_MAX;
 
           fd_gui_config_parse_info_t * info =  fd_gui_peers_node_info_map_ele_query( peers->node_info_map, fd_type_pun_const(update->origin ), NULL, peers->node_info_pool );
           if( FD_LIKELY( info ) ) fd_memcpy( peer->name, info->name, sizeof(info->name) );
@@ -864,6 +865,11 @@ fd_gui_peers_handle_epoch_info( fd_gui_peers_ctx_t *        peers,
   /* sort for deduplication */
   fd_gui_peers_voter_sort_iden_desc_inplace( peers->epochs[ epoch_idx ].stakes, peers->epochs[ epoch_idx ].stakes_cnt );
 
+  /* The prev epoch's stakes are already vote_desc sorted (invariant
+     maintained at the bottom of this function).  We binary search into
+     it below when setting prev_stake for each peer. */
+  ulong prev_epoch_idx = (epoch_idx + 1UL) % 2UL;
+
   ulong updated_cnt = 0UL;
   ulong i=0UL;
   while( i<peers->epochs[ epoch_idx ].stakes_cnt ) {
@@ -886,6 +892,18 @@ fd_gui_peers_handle_epoch_info( fd_gui_peers_ctx_t *        peers,
     peer->has_vote_info = 1;
     peer->vote_account  = best->weight.vote_key;
     peer->stake         = best->weight.stake;
+
+    /* Look up prev_stake via binary search into the prev epoch's
+       vote_desc sorted stakes array. */
+    peer->prev_stake = ULONG_MAX;
+    if( FD_LIKELY( peers->epochs[ prev_epoch_idx ].epoch!=ULONG_MAX ) ) {
+      fd_gui_peers_voter_t * prev_stakes     = peers->epochs[ prev_epoch_idx ].stakes;
+      ulong                  prev_stakes_cnt = peers->epochs[ prev_epoch_idx ].stakes_cnt;
+      ulong prev_idx = fd_gui_peers_voter_sort_vote_desc_split( prev_stakes, prev_stakes_cnt, (fd_gui_peers_voter_t){ .weight = { .vote_key = best->weight.vote_key } } );
+      if( FD_LIKELY( prev_idx<prev_stakes_cnt && !memcmp( prev_stakes[ prev_idx ].weight.vote_key.uc, best->weight.vote_key.uc, sizeof(fd_pubkey_t) ) ) ) {
+        peer->prev_stake = prev_stakes[ prev_idx ].weight.stake;
+      }
+    }
 
     fd_gui_peers_live_table_idx_insert( peers->live_table, peer_idx, peers->contact_info_table );
 
