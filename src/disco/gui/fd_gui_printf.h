@@ -171,4 +171,14 @@ fd_gui_printf_peers_view_resize( fd_gui_peers_ctx_t *  peers, ulong sz );
 void
 fd_gui_peers_printf_gossip_stats( fd_gui_peers_ctx_t *  peers );
 
+void
+fd_gui_peers_printf_wfs_offline_update( fd_gui_peers_ctx_t * peers,
+                                        ulong const *        add_idxs,
+                                        ulong                add_cnt,
+                                        ulong const *        remove_idxs,
+                                        ulong                remove_cnt );
+
+void
+fd_gui_peers_printf_wfs_offline_all( fd_gui_peers_ctx_t * peers );
+
 #endif /* HEADER_fd_src_disco_gui_fd_gui_printf_h */

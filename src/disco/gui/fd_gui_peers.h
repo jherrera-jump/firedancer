@@ -21,6 +21,7 @@
 #include "../../flamenco/runtime/fd_runtime_const.h"
 
 #include "../../waltz/http/fd_http_server.h"
+#include "../../discof/restore/utils/fd_ssmsg.h"
 #include "../topo/fd_topo.h"
 
 #if FD_HAS_ZSTD
@@ -84,6 +85,25 @@ struct fd_gui_geoip_node {
 };
 
 typedef struct fd_gui_geoip_node fd_gui_geoip_node_t;
+
+#define FD_GUI_WFS_MAX_PEERS FD_RUNTIME_MAX_VOTE_ACCOUNTS
+
+struct fd_gui_wfs_offline_peer {
+  fd_pubkey_t identity_key;
+  ulong       stake;
+  int         is_online;
+  long        wallclock_nanos;
+
+  ulong       fresh_prev;
+  ulong       fresh_next;
+};
+typedef struct fd_gui_wfs_offline_peer fd_gui_wfs_offline_peer_t;
+
+#define DLIST_NAME  wfs_fresh_dlist
+#define DLIST_ELE_T fd_gui_wfs_offline_peer_t
+#define DLIST_PREV  fresh_prev
+#define DLIST_NEXT  fresh_next
+#include "../../util/tmpl/fd_dlist.c"
 
 #define FD_GUI_PEERS_NODE_NOP    (0)
 #define FD_GUI_PEERS_NODE_ADD    (1)
@@ -400,6 +420,10 @@ struct fd_gui_peers_ctx {
 #endif
 
   fd_gui_ip_db_t dbip;
+
+  fd_gui_wfs_offline_peer_t wfs_peers[ FD_GUI_WFS_MAX_PEERS ];
+  ulong                     wfs_peers_cnt;
+  wfs_fresh_dlist_t         wfs_fresh_dlist[ 1 ];
 };
 
 typedef struct fd_gui_peers_ctx fd_gui_peers_ctx_t;
@@ -473,6 +497,10 @@ void
 fd_gui_peers_handle_config_account( fd_gui_peers_ctx_t *  peers,
                                     uchar const *         data,
                                     ulong                 sz );
+
+void
+fd_gui_peers_handle_manifest( fd_gui_peers_ctx_t *           peers,
+                              fd_snapshot_manifest_t const * manifest );
 
 /* fd_gui_peers_ws_message handles incoming websocket request payloads
    requesting peer-related responses.  ws_conn_id is the connection id

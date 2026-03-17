@@ -2616,3 +2616,80 @@ fd_gui_printf_slot_query_shreds( fd_gui_t * gui,
     jsonp_close_object( gui->http );
   jsonp_close_envelope( gui->http );
 }
+
+/* fd_gui_peers_printf_wfs_offline_peer serializes a single offline
+   peer entry into the current JSON array context. */
+static void
+fd_gui_peers_printf_wfs_offline_peer( fd_gui_peers_ctx_t * peers,
+                                      ulong                peer_idx ) {
+  fd_gui_wfs_offline_peer_t * wp = &peers->wfs_peers[ peer_idx ];
+
+  jsonp_open_object( peers->http, NULL );
+
+    char identity_base58[ FD_BASE58_ENCODED_32_SZ ];
+    fd_base58_encode_32( wp->identity_key.uc, NULL, identity_base58 );
+    jsonp_string( peers->http, "identity", identity_base58 );
+
+    jsonp_ulong_as_str( peers->http, "stake", wp->stake );
+
+    fd_gui_config_parse_info_t * info =
+        fd_gui_peers_node_info_map_ele_query(
+            peers->node_info_map, &wp->identity_key, NULL, peers->node_info_pool );
+    if( info ) {
+      jsonp_open_object( peers->http, "info" );
+        jsonp_string( peers->http, "name",             info->name );
+        jsonp_string( peers->http, "details",          info->details );
+        jsonp_string( peers->http, "website",          info->website );
+        jsonp_string( peers->http, "icon_url",         info->icon_uri );
+        jsonp_string( peers->http, "keybase_username", info->keybase_username );
+      jsonp_close_object( peers->http );
+    } else {
+      jsonp_null( peers->http, "info" );
+    }
+
+  jsonp_close_object( peers->http );
+}
+
+void
+fd_gui_peers_printf_wfs_offline_update( fd_gui_peers_ctx_t * peers,
+                                        ulong const *        add_idxs,
+                                        ulong                add_cnt,
+                                        ulong const *        remove_idxs,
+                                        ulong                remove_cnt ) {
+  jsonp_open_envelope( peers->http, "wfs_offline_peers", "update" );
+    jsonp_open_object( peers->http, "value" );
+      jsonp_open_array( peers->http, "add" );
+        for( ulong i=0UL; i<add_cnt; i++ ) {
+          fd_gui_peers_printf_wfs_offline_peer( peers, add_idxs[ i ] );
+        }
+      jsonp_close_array( peers->http );
+      jsonp_open_array( peers->http, "remove" );
+        for( ulong i=0UL; i<remove_cnt; i++ ) {
+          fd_gui_wfs_offline_peer_t * wp = &peers->wfs_peers[ remove_idxs[ i ] ];
+          jsonp_open_object( peers->http, NULL );
+            char identity_base58[ FD_BASE58_ENCODED_32_SZ ];
+            fd_base58_encode_32( wp->identity_key.uc, NULL, identity_base58 );
+            jsonp_string( peers->http, "identity", identity_base58 );
+          jsonp_close_object( peers->http );
+        }
+      jsonp_close_array( peers->http );
+    jsonp_close_object( peers->http );
+  jsonp_close_envelope( peers->http );
+}
+
+void
+fd_gui_peers_printf_wfs_offline_all( fd_gui_peers_ctx_t * peers ) {
+  jsonp_open_envelope( peers->http, "wfs_offline_peers", "update" );
+    jsonp_open_object( peers->http, "value" );
+      jsonp_open_array( peers->http, "add" );
+        for( ulong i=0UL; i<peers->wfs_peers_cnt; i++ ) {
+          if( FD_UNLIKELY( !peers->wfs_peers[ i ].is_online ) ) {
+            fd_gui_peers_printf_wfs_offline_peer( peers, i );
+          }
+        }
+      jsonp_close_array( peers->http );
+      jsonp_open_array( peers->http, "remove" );
+      jsonp_close_array( peers->http );
+    jsonp_close_object( peers->http );
+  jsonp_close_envelope( peers->http );
+}

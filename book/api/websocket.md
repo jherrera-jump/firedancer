@@ -597,6 +597,9 @@ stake that is activating/deactivating in the current epoch and any stake
 that was explicilty undelegated prior to restart (e.g. inactive testnet
 participants or bad actors).
 
+During the `waiting_for_supermajority` phase, per-peer offline status
+is available via the [`wfs_offline_peers`](#wfs_offline_peers) topic.
+
 #### `summary.schedule_strategy`
 | frequency  | type     | example |
 |------------|----------|---------|
@@ -1857,6 +1860,60 @@ list of gossip peers added, removed, or updated. The list of peers is
 full and includes this node itself, nodes with a different
 `shred_version`, nodes publishing corrupt or bad information, and so
 on.
+
+### wfs_offline_peers
+The `wfs_offline_peers` topic publishes edge-triggered add/remove
+messages for staked peers that are **not** currently active on gossip.
+
+The message is only published if the client is configured to boot with
+the `waiting_for_supermajority` phase enabled.
+
+#### `wfs_offline_peers.update`
+| frequency        | type                              | example |
+|------------------|-----------------------------------|---------|
+| *Once* + *Live*  | `ClusterRestartOfflinePeerUpdate` | below   |
+
+::: details Example
+
+**Initial state (all peers offline):**
+```json
+{
+    "topic": "wfs_offline_peers",
+    "key": "update",
+    "value": {
+        "add": [
+            {
+                "identity": "Fe4StcZSQ228dKK2hni7aCP7ZprNhj8QKWzFe5usGFYF",
+                "stake": "5812",
+                "info": null
+            }
+        ],
+        "remove": [
+          { "identity": "9aE6Bp1hbDpMFKqnWGUMbfxfMPXswPbkNwNrSjhpFiSN" }
+        ]
+    }
+}
+```
+
+:::
+
+**`ClusterRestartOfflinePeerUpdate`**
+| Field           | Type                   | Description |
+|-----------------|------------------------|-------------|
+| identity        | `string`               | Identity public key of the validator, encoded in base58 |
+| stake           | `string`               | Total stake in lamports for this identity (aggregated across all vote accounts), derived from the snapshot manifest |
+| info            | `PeerUpdateInfo\|null` | Self-reported validator information from the ConfigProgram, if available, and `null` otherwise |
+
+**`ClusterRestartOfflinePeerRemove`**
+| Field    | Type     | Description |
+|----------|----------|-------------|
+| identity | `string` | Identity public key of the validator, encoded in base58 |
+
+**`ClusterRestartOfflinePeersUpdate`**
+| Field  | Type                                | Description |
+|--------|-------------------------------------|-------------|
+| add    | `ClusterRestartOfflinePeerUpdate[]` | List of peers that became offline (or all offline peers on initial connect) |
+| remove | `ClusterRestartOfflinePeerRemove[]` | List of peers that came back online and are no longer offline |
 
 ### slot
 Slots are opportunities for a leader to produce a block. A slot can be

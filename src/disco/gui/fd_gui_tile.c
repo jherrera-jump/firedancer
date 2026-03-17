@@ -393,6 +393,7 @@ after_frag( fd_gui_ctx_t *      ctx,
     case IN_KIND_SNAPIN_MANIF: {
       FD_TEST( ctx->is_full_client );
       fd_gui_handle_snapshot_manifest( ctx->gui, (fd_snapshot_manifest_t const *)src );
+      fd_gui_peers_handle_manifest( ctx->peers, (fd_snapshot_manifest_t const *)src );
       break;
     }
     case IN_KIND_GENESI_OUT: {
