@@ -241,7 +241,7 @@ fd_gui_peers_new( void *             shmem,
     ctx->open_ws_conn_cnt  = 0UL;
     ctx->active_ws_conn_id = ULONG_MAX;
 
-    ctx->slot_voted = ULONG_MAX;
+    ctx->slot_voted          = ULONG_MAX;
 
     for( ulong i=0UL; i<2UL; i++ ) {
       ctx->epochs[ i ].epoch      = ULONG_MAX;
@@ -914,7 +914,10 @@ fd_gui_peers_handle_epoch_info( fd_gui_peers_ctx_t *        peers,
 
 void
 fd_gui_peers_update_delinquency( fd_gui_peers_ctx_t * peers,
-                                 long                 now FD_PARAM_UNUSED ) {
+                                 long                 now FD_PARAM_UNUSED,
+                                 long *               vote_distance_out ) {
+  if( FD_LIKELY( vote_distance_out ) ) *vote_distance_out = -1L;
+
   ulong epoch_t_2     = ULONG_MAX;
   for( ulong i=0UL; i<2UL; i++ ) if( epoch_t_2==ULONG_MAX || peers->epochs[ i ].epoch<epoch_t_2 ) epoch_t_2 = peers->epochs[ i ].epoch;
   ulong epoch_idx = epoch_t_2 % 2UL;
@@ -938,6 +941,12 @@ fd_gui_peers_update_delinquency( fd_gui_peers_ctx_t * peers,
       break;
     }
   }
+
+  /* Compute our vote distance as p33 - our_vote_slot. */
+  if( FD_LIKELY( vote_distance_out && last_vote_slot_p33!=ULONG_MAX && peers->slot_voted!=ULONG_MAX ) ) {
+    *vote_distance_out = (long)last_vote_slot_p33 - (long)peers->slot_voted;
+  }
+
   if( FD_UNLIKELY( last_vote_slot_p33==ULONG_MAX ) ) {
     /* maintain invariant for fd_gui_peers_handle_vote */
     fd_gui_peers_voter_sort_vote_desc_inplace( voters, voters_cnt );
@@ -950,9 +959,7 @@ fd_gui_peers_update_delinquency( fd_gui_peers_ctx_t * peers,
 
   ulong updated_cnt = 0UL;
   for( ulong i=0UL; i<voters_cnt; i++ ) {
-    ulong peer_idx = fd_gui_peers_node_pubkey_map_idx_query(
-        peers->node_pubkey_map, &voters[ i ].weight.id_key, ULONG_MAX,
-        peers->contact_info_table );
+    ulong peer_idx = fd_gui_peers_node_pubkey_map_idx_query( peers->node_pubkey_map, &voters[ i ].weight.id_key, ULONG_MAX, peers->contact_info_table );
     if( FD_UNLIKELY( peer_idx==ULONG_MAX ) ) continue;
 
     fd_gui_peers_node_t * peer = &peers->contact_info_table[ peer_idx ];

@@ -360,12 +360,26 @@ after_frag( fd_gui_ctx_t *      ctx,
       if( FD_UNLIKELY( sig==REPLAY_SIG_SLOT_COMPLETED ) ) {
         fd_replay_slot_completed_t const * slot_completed =  (fd_replay_slot_completed_t const *)src;
 
-        fd_gui_peers_update_delinquency( ctx->peers, fd_clock_now( ctx->clock ) );
-
         fd_gui_handle_replay_update( ctx->gui, slot_completed, ctx->peers->slot_voted, fd_clock_now( ctx->clock ) );
+
+        long vote_distance = -1L;
+        fd_gui_peers_update_delinquency( ctx->peers, fd_clock_now( ctx->clock ), &vote_distance );
+        fd_gui_handle_our_vote_latency( ctx->gui, vote_distance );
       } else if( FD_UNLIKELY( sig==REPLAY_SIG_BECAME_LEADER ) ) {
         fd_became_leader_t * became_leader = (fd_became_leader_t *)src;
         fd_gui_became_leader( ctx->gui, became_leader->slot, became_leader->slot_start_ns, became_leader->slot_end_ns, became_leader->limits.slot_max_cost, became_leader->max_microblocks_in_slot );
+      } else if( FD_UNLIKELY( sig==REPLAY_SIG_ROOT_ADVANCED ) ) {
+        fd_replay_root_advanced_t const * msg = (fd_replay_root_advanced_t const *)src;
+        fd_gui_handle_root_advanced( ctx->gui, msg );
+      } else if( FD_UNLIKELY( sig==REPLAY_SIG_OC_ADVANCED ) ) {
+        fd_replay_oc_advanced_t const * msg = (fd_replay_oc_advanced_t const *)src;
+        fd_gui_handle_oc_advanced( ctx->gui, msg->slot );
+      } else if( FD_UNLIKELY( sig==REPLAY_SIG_RESET ) ) {
+        /* This branch needs to be after handling
+           REPLAY_SIG_SLOT_COMPLETED since downstream code assumes we've
+           already parsed the slot_complete message for the reset slot. */
+        fd_poh_reset_t const * reset = (fd_poh_reset_t const *)src;
+        fd_gui_handle_replay_reset( ctx->gui, (fd_hash_t const *)reset->completed_block_id, reset->completed_slot, fd_clock_now( ctx->clock ) );
       } else {
         return;
       }
@@ -392,12 +406,9 @@ after_frag( fd_gui_ctx_t *      ctx,
     }
     case IN_KIND_TOWER_OUT: {
       FD_TEST( ctx->is_full_client );
-      if( FD_LIKELY( sig==FD_TOWER_SIG_SLOT_DONE )) {
+      if( FD_LIKELY( sig==FD_TOWER_SIG_SLOT_DONE ) ) {
         fd_tower_slot_done_t const * tower = (fd_tower_slot_done_t const *)src;
         fd_gui_handle_tower_update( ctx->gui, tower, fd_clock_now( ctx->clock ) );
-      }
-      if( FD_UNLIKELY( sig==FD_TOWER_SIG_SLOT_CONFIRMED ) ) {
-        fd_gui_handle_notarization_update( ctx->gui, (fd_tower_slot_confirmed_t const *)src );
       }
       break;
     }

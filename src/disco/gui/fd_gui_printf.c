@@ -329,7 +329,7 @@ fd_gui_printf_catch_up_history( fd_gui_t * gui ) {
             if( FD_UNLIKELY( event->timestamp < gui->summary.boot_progress.catching_up_time_nanos - age_ns ) ) break; \
             do { code_staged } while(0); \
           } \
-          fd_gui_slot_t * s = fd_gui_get_slot( gui, gui->shreds.history_slot ); \
+          fd_gui_slot_t * s = fd_gui_get_slot_by_num( gui, gui->shreds.history_slot ); \
           while( s \
               && s->shreds.start_offset!=ULONG_MAX \
               && s->shreds.end_offset!=ULONG_MAX \
@@ -339,7 +339,7 @@ fd_gui_printf_catch_up_history( fd_gui_t * gui ) {
               fd_gui_slot_history_shred_event_t * event = &gui->shreds.history[ (i-1UL) % FD_GUI_SHREDS_HISTORY_SZ ]; (void)event; \
               do { code_archive } while (0); \
             } \
-            s = fd_gui_get_slot( gui, s->parent_slot ); \
+            s = fd_gui_get_parent( gui, s ); \
           } \
         } while(0);
 
@@ -429,7 +429,7 @@ fd_gui_printf_skipped_history( fd_gui_t * gui, ulong epoch_idx ) {
       ulong end_slot   = gui->epoch.epochs[ epoch_idx ].end_slot;
       for( ulong s=start_slot; s<fd_ulong_min( end_slot, start_slot+FD_GUI_SLOTS_CNT ); s++ ) {
         if( FD_LIKELY( gui->summary.slot_completed==ULONG_MAX ) ) break;
-        fd_gui_slot_t * slot = fd_gui_get_slot( gui, s );
+        fd_gui_slot_t * slot = fd_gui_get_slot_by_num( gui, s );
 
         if( FD_UNLIKELY( !slot ) ) continue;
         if( FD_UNLIKELY( slot->mine && slot->skipped ) ) jsonp_ulong( gui->http, NULL, slot->slot );
@@ -446,7 +446,7 @@ fd_gui_printf_skipped_history_cluster( fd_gui_t * gui, ulong epoch_idx ) {
       ulong end_slot   = gui->epoch.epochs[ epoch_idx ].end_slot;
       for( ulong s=start_slot; s<fd_ulong_min( end_slot, start_slot+FD_GUI_SLOTS_CNT ); s++ ) {
         if( FD_LIKELY( gui->summary.slot_completed==ULONG_MAX ) ) break;
-        fd_gui_slot_t * slot = fd_gui_get_slot( gui, s );
+        fd_gui_slot_t * slot = fd_gui_get_slot_by_num( gui, s );
 
         if( FD_UNLIKELY( !slot ) ) continue;
         if( FD_UNLIKELY( slot->skipped ) ) jsonp_ulong( gui->http, NULL, slot->slot );
@@ -479,7 +479,7 @@ fd_gui_printf_late_votes_history( fd_gui_t * gui ) {
             ulong s = gui->summary.late_votes[ i ];
             ulong s2 = gui->summary.late_votes[ i + 1 ];
             for( ulong j=s; j<=fd_ulong_min( s2, s+FD_GUI_SLOTS_CNT ); j++ ) {
-              fd_gui_slot_t * slot = fd_gui_get_slot( gui, j );
+              fd_gui_slot_t * slot = fd_gui_get_slot_by_num( gui, j );
               if( FD_UNLIKELY( slot && slot->vote_latency!=UCHAR_MAX ) ) jsonp_ulong( gui->http, NULL, slot->vote_latency );
               else                                                       jsonp_null( gui->http, NULL );
             }
@@ -1564,7 +1564,7 @@ fd_gui_printf_ts_tile_timers( fd_gui_t *                   gui,
 void
 fd_gui_printf_slot( fd_gui_t * gui,
                     ulong      _slot ) {
-  fd_gui_slot_t * slot = fd_gui_get_slot( gui, _slot );
+  fd_gui_slot_t * slot = fd_gui_get_slot_by_num( gui, _slot );
 
   char const * level;
   switch( slot->level ) {
@@ -1576,7 +1576,7 @@ fd_gui_printf_slot( fd_gui_t * gui,
     default:                                         level = "unknown"; break;
   }
 
-  fd_gui_slot_t * parent_slot = fd_gui_get_slot( gui, slot->parent_slot );
+  fd_gui_slot_t * parent_slot = fd_gui_get_slot_by_num( gui, slot->parent_slot );
   long duration_nanos = LONG_MAX;
   if( FD_LIKELY( slot->completed_time!=LONG_MAX && parent_slot && parent_slot->completed_time!=LONG_MAX ) ) {
     duration_nanos = slot->completed_time - parent_slot->completed_time;
@@ -1696,7 +1696,7 @@ void
 fd_gui_printf_slot_request( fd_gui_t * gui,
                             ulong      _slot,
                             ulong      id ) {
-  fd_gui_slot_t * slot = fd_gui_get_slot( gui, _slot );
+  fd_gui_slot_t * slot = fd_gui_get_slot_by_num( gui, _slot );
 
   char const * level;
   switch( slot->level ) {
@@ -1708,7 +1708,7 @@ fd_gui_printf_slot_request( fd_gui_t * gui,
     default:                                         level = "unknown"; break;
   }
 
-  fd_gui_slot_t * parent_slot = fd_gui_get_slot( gui, slot->parent_slot );
+  fd_gui_slot_t * parent_slot = fd_gui_get_slot_by_num( gui, slot->parent_slot );
   long duration_nanos = LONG_MAX;
   if( FD_LIKELY( slot->completed_time!=LONG_MAX && parent_slot && parent_slot->completed_time!=LONG_MAX ) ) {
     duration_nanos = slot->completed_time - parent_slot->completed_time;
@@ -1768,7 +1768,7 @@ void
 fd_gui_printf_slot_transactions_request( fd_gui_t * gui,
                                          ulong      _slot,
                                          ulong      id ) {
-  fd_gui_slot_t * slot = fd_gui_get_slot( gui, _slot );
+  fd_gui_slot_t * slot = fd_gui_get_slot_by_num( gui, _slot );
 
   char const * level;
   switch( slot->level ) {
@@ -1780,7 +1780,7 @@ fd_gui_printf_slot_transactions_request( fd_gui_t * gui,
     default:                                         level = "unknown"; break;
   }
 
-  fd_gui_slot_t * parent_slot = fd_gui_get_slot( gui, slot->parent_slot );
+  fd_gui_slot_t * parent_slot = fd_gui_get_slot_by_num( gui, slot->parent_slot );
   long duration_nanos = LONG_MAX;
   if( FD_LIKELY( slot->completed_time!=LONG_MAX && parent_slot && parent_slot->completed_time!=LONG_MAX ) ) {
     duration_nanos = slot->completed_time - parent_slot->completed_time;
@@ -2045,7 +2045,7 @@ void
 fd_gui_printf_slot_request_detailed( fd_gui_t * gui,
                                      ulong      _slot,
                                      ulong      id ) {
-  fd_gui_slot_t * slot = fd_gui_get_slot( gui, _slot );
+  fd_gui_slot_t * slot = fd_gui_get_slot_by_num( gui, _slot );
 
   char const * level;
   switch( slot->level ) {
@@ -2057,7 +2057,7 @@ fd_gui_printf_slot_request_detailed( fd_gui_t * gui,
     default:                                         level = "unknown"; break;
   }
 
-  fd_gui_slot_t * parent_slot = fd_gui_get_slot( gui, slot->parent_slot );
+  fd_gui_slot_t * parent_slot = fd_gui_get_slot_by_num( gui, slot->parent_slot );
   long duration_nanos = LONG_MAX;
   if( FD_LIKELY( slot->completed_time!=LONG_MAX && parent_slot && parent_slot->completed_time!=LONG_MAX ) ) {
     duration_nanos = slot->completed_time - parent_slot->completed_time;
@@ -2109,48 +2109,39 @@ fd_gui_printf_slot_request_detailed( fd_gui_t * gui,
         else                                       jsonp_ulong( gui->http, "tips", slot->tips );
       jsonp_close_object( gui->http );
 
-      if( FD_LIKELY( gui->summary.slot_completed!=ULONG_MAX && gui->summary.slot_completed>_slot ) ) {
-        fd_gui_printf_waterfall( gui, slot->waterfall_begin, slot->waterfall_end );
+      if( FD_LIKELY( gui->summary.slot_completed!=ULONG_MAX && gui->summary.slot_completed>_slot
+                     && lslot && lslot->unbecame_leader ) ) {
+        fd_gui_printf_waterfall( gui, lslot->waterfall_begin, lslot->waterfall_end );
 
-        fd_gui_leader_slot_t * lslot = fd_gui_get_leader_slot( gui, _slot );
-        if( FD_LIKELY( lslot && lslot->unbecame_leader ) ) {
-          jsonp_open_array( gui->http, "tile_timers" );
-            fd_gui_tile_timers_t const * prev_timer = lslot->tile_timers;
-            for( ulong i=1UL; i<lslot->tile_timers_sample_cnt; i++ ) {
-              fd_gui_tile_timers_t const * cur_timer = lslot->tile_timers + i * gui->tile_cnt;
-              fd_gui_printf_ts_tile_timers( gui, prev_timer, cur_timer );
-              prev_timer = cur_timer;
-            }
-          jsonp_close_array( gui->http );
-        } else {
-          /* Our tile timers were overwritten. */
-          jsonp_null( gui->http, "tile_timers" );
-        }
+        jsonp_open_array( gui->http, "tile_timers" );
+          fd_gui_tile_timers_t const * prev_timer = lslot->tile_timers;
+          for( ulong i=1UL; i<lslot->tile_timers_sample_cnt; i++ ) {
+            fd_gui_tile_timers_t const * cur_timer = lslot->tile_timers + i * gui->tile_cnt;
+            fd_gui_printf_ts_tile_timers( gui, prev_timer, cur_timer );
+            prev_timer = cur_timer;
+          }
+        jsonp_close_array( gui->http );
 
-        if( FD_LIKELY( lslot && lslot->unbecame_leader ) ) {
-          jsonp_open_array( gui->http, "scheduler_counts" );
-            /* Unlike tile timers (which are counters), scheduler counts
-               are a gauge and we don't take a diff. */
-            for( ulong i=0UL; i<lslot->scheduler_counts_sample_cnt; i++ ) {
-              fd_gui_scheduler_counts_t const * cur = lslot->scheduler_counts[ i ];
-              jsonp_open_object( gui->http, NULL );
-                jsonp_long_as_str( gui->http, "timestamp_nanos", cur->sample_time_ns );
-                jsonp_ulong      ( gui->http, "regular",         cur->regular        );
-                jsonp_ulong      ( gui->http, "votes",           cur->votes          );
-                jsonp_ulong      ( gui->http, "conflicting",     cur->conflicting    );
-                jsonp_ulong      ( gui->http, "bundles",         cur->bundles        );
-              jsonp_close_object( gui->http );
-            }
-          jsonp_close_array( gui->http );
-        } else {
-          /* Our scheduler counts were overwritten. */
-          jsonp_null( gui->http, "scheduler_counts" );
-        }
+        jsonp_open_array( gui->http, "scheduler_counts" );
+          /* Unlike tile timers (which are counters), scheduler counts
+             are a gauge and we don't take a diff. */
+          for( ulong i=0UL; i<lslot->scheduler_counts_sample_cnt; i++ ) {
+            fd_gui_scheduler_counts_t const * cur = lslot->scheduler_counts[ i ];
+            jsonp_open_object( gui->http, NULL );
+              jsonp_long_as_str( gui->http, "timestamp_nanos", cur->sample_time_ns );
+              jsonp_ulong      ( gui->http, "regular",         cur->regular        );
+              jsonp_ulong      ( gui->http, "votes",           cur->votes          );
+              jsonp_ulong      ( gui->http, "conflicting",     cur->conflicting    );
+              jsonp_ulong      ( gui->http, "bundles",         cur->bundles        );
+            jsonp_close_object( gui->http );
+          }
+        jsonp_close_array( gui->http );
 
-        fd_gui_printf_tile_stats( gui, slot->tile_stats_begin, slot->tile_stats_end );
+        fd_gui_printf_tile_stats( gui, lslot->tile_stats_begin, lslot->tile_stats_end );
       } else {
         jsonp_null( gui->http, "waterfall" );
         jsonp_null( gui->http, "tile_timers" );
+        jsonp_null( gui->http, "scheduler_counts" );
         jsonp_null( gui->http, "tile_primary_metric" );
       }
 
@@ -2523,7 +2514,7 @@ fd_gui_printf_shreds_staged( fd_gui_t * gui, ulong start_offset, ulong end_offse
 
 void
 fd_gui_printf_shreds_history( fd_gui_t * gui, ulong _slot ) {
-  fd_gui_slot_t * slot = fd_gui_get_slot( gui, _slot );
+  fd_gui_slot_t * slot = fd_gui_get_slot_by_num( gui, _slot );
   FD_TEST( slot );
   ulong end_offset = slot->shreds.end_offset;
   ulong start_offset = slot->shreds.start_offset;

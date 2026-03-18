@@ -374,7 +374,7 @@ struct fd_gui_peers_ctx {
   fd_gui_peers_gossip_stats_t gossip_stats  [ 1 ];
   fd_gui_peers_node_t contact_info_table[ FD_CONTACT_INFO_TABLE_SIZE ];
 
-  ulong slot_voted; /* last vote slot for this validator */
+  ulong slot_voted;          /* last vote slot for this validator */
 
   /* We want the gui to reflect stakes_t_2 since this is what matters
      consequentially for delinquency / leader schedule info.
@@ -459,7 +459,8 @@ fd_gui_peers_handle_vote( fd_gui_peers_ctx_t * peers,
    delinquent, publishing delinquency updates to the frontend. */
 void
 fd_gui_peers_update_delinquency( fd_gui_peers_ctx_t * peers,
-                                 long                 now );
+                                 long                 now,
+                                 long *               vote_distance_out );
 
 /* fd_gui_peers_handle_epoch_info is called at the epoch boundary and
    publishes updates for peer stake information. */

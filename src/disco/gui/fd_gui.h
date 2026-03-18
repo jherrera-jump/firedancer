@@ -90,7 +90,9 @@ struct fd_gui_validator_info {
 #define FD_GUI_SLOT_LEADER_STARTED   (1UL)
 #define FD_GUI_SLOT_LEADER_ENDED     (2UL)
 
-#define FD_GUI_SLOTS_CNT                           (864000UL) /* 2x 432000 */
+#define FD_GUI_SLOTS_CNT                           (864000UL)
+#define FD_GUI_ARCHIVE_CNT                         (864000UL)
+#define FD_GUI_STAGED_POOL_SZ                      (8192UL)   /* pool for live slots */
 #define FD_GUI_LEADER_CNT                          (4096UL)
 
 #define FD_GUI_TPS_HISTORY_WINDOW_DURATION_SECONDS (10L)
@@ -278,6 +280,69 @@ struct fd_gui_network_stats {
 
 typedef struct fd_gui_network_stats fd_gui_network_stats_t;
 
+struct fd_gui_txn_waterfall {
+  struct {
+    ulong quic;
+    ulong udp;
+    ulong gossip;
+    ulong block_engine;
+    ulong pack_cranked;
+  } in;
+
+  struct {
+    ulong net_overrun;
+    ulong quic_overrun;
+    ulong quic_frag_drop;
+    ulong quic_abandoned;
+    ulong tpu_quic_invalid;
+    ulong tpu_udp_invalid;
+    ulong verify_overrun;
+    ulong verify_parse;
+    ulong verify_failed;
+    ulong verify_duplicate;
+    ulong dedup_duplicate;
+    ulong resolv_lut_failed;
+    ulong resolv_expired;
+    ulong resolv_ancient;
+    ulong resolv_no_ledger;
+    ulong resolv_retained;
+    ulong pack_invalid;
+    ulong pack_invalid_bundle;
+    ulong pack_expired;
+    ulong pack_already_executed;
+    ulong pack_retained;
+    ulong pack_wait_full;
+    ulong pack_leader_slow;
+    ulong bank_invalid;
+    ulong bank_nonce_already_advanced;
+    ulong bank_nonce_advance_failed;
+    ulong bank_nonce_wrong_blockhash;
+    ulong block_success;
+    ulong block_fail;
+  } out;
+};
+
+typedef struct fd_gui_txn_waterfall fd_gui_txn_waterfall_t;
+
+struct fd_gui_tile_stats {
+  long  sample_time_nanos;
+
+  ulong net_in_rx_bytes;           /* Number of bytes received by the net or sock tile*/
+  ulong quic_conn_cnt;             /* Number of active QUIC connections */
+  fd_histf_t bundle_rx_delay_hist; /* Histogram of bundle rx delay */
+  ulong bundle_rtt_smoothed_nanos; /* RTT (nanoseconds) moving average */
+  ulong verify_drop_cnt;           /* Number of transactions dropped by verify tiles */
+  ulong verify_total_cnt;          /* Number of transactions received by verify tiles */
+  ulong dedup_drop_cnt;            /* Number of transactions dropped by dedup tile */
+  ulong dedup_total_cnt;           /* Number of transactions received by dedup tile */
+  ulong pack_buffer_cnt;           /* Number of buffered transactions in the pack tile */
+  ulong pack_buffer_capacity;      /* Total size of the pack transaction buffer */
+  ulong bank_txn_exec_cnt;         /* Number of transactions processed by the bank tile */
+  ulong net_out_tx_bytes;          /* Number of bytes sent by the net or sock tile */
+};
+
+typedef struct fd_gui_tile_stats fd_gui_tile_stats_t;
+
 struct fd_gui_leader_slot {
   ulong slot;
   fd_hash_t block_hash;
@@ -312,6 +377,12 @@ struct fd_gui_leader_slot {
 
   fd_gui_scheduler_counts_t scheduler_counts[ FD_GUI_SCHEDULER_COUNT_LEADER_DOWNSAMPLE_CNT ][ 1 ];
   ulong                     scheduler_counts_sample_cnt;
+
+  fd_gui_txn_waterfall_t waterfall_begin[ 1 ];
+  fd_gui_txn_waterfall_t waterfall_end[ 1 ];
+
+  fd_gui_tile_stats_t tile_stats_begin[ 1 ];
+  fd_gui_tile_stats_t tile_stats_end[ 1 ];
 
   struct {
     uint microblocks_upper_bound; /* An upper bound on the number of microblocks in the slot.  If the number of
@@ -428,74 +499,11 @@ struct __attribute__((packed)) fd_gui_txn {
 
 typedef struct fd_gui_txn fd_gui_txn_t;
 
-struct fd_gui_txn_waterfall {
-  struct {
-    ulong quic;
-    ulong udp;
-    ulong gossip;
-    ulong block_engine;
-    ulong pack_cranked;
-  } in;
-
-  struct {
-    ulong net_overrun;
-    ulong quic_overrun;
-    ulong quic_frag_drop;
-    ulong quic_abandoned;
-    ulong tpu_quic_invalid;
-    ulong tpu_udp_invalid;
-    ulong verify_overrun;
-    ulong verify_parse;
-    ulong verify_failed;
-    ulong verify_duplicate;
-    ulong dedup_duplicate;
-    ulong resolv_lut_failed;
-    ulong resolv_expired;
-    ulong resolv_ancient;
-    ulong resolv_no_ledger;
-    ulong resolv_retained;
-    ulong pack_invalid;
-    ulong pack_invalid_bundle;
-    ulong pack_expired;
-    ulong pack_already_executed;
-    ulong pack_retained;
-    ulong pack_wait_full;
-    ulong pack_leader_slow;
-    ulong bank_invalid;
-    ulong bank_nonce_already_advanced;
-    ulong bank_nonce_advance_failed;
-    ulong bank_nonce_wrong_blockhash;
-    ulong block_success;
-    ulong block_fail;
-  } out;
-};
-
-typedef struct fd_gui_txn_waterfall fd_gui_txn_waterfall_t;
-
-struct fd_gui_tile_stats {
-  long  sample_time_nanos;
-
-  ulong net_in_rx_bytes;           /* Number of bytes received by the net or sock tile*/
-  ulong quic_conn_cnt;             /* Number of active QUIC connections */
-  fd_histf_t bundle_rx_delay_hist; /* Histogram of bundle rx delay */
-  ulong bundle_rtt_smoothed_nanos; /* RTT (nanoseconds) moving average */
-  ulong verify_drop_cnt;           /* Number of transactions dropped by verify tiles */
-  ulong verify_total_cnt;          /* Number of transactions received by verify tiles */
-  ulong dedup_drop_cnt;            /* Number of transactions dropped by dedup tile */
-  ulong dedup_total_cnt;           /* Number of transactions received by dedup tile */
-  ulong pack_buffer_cnt;           /* Number of buffered transactions in the pack tile */
-  ulong pack_buffer_capacity;      /* Total size of the pack transaction buffer */
-  ulong bank_txn_exec_cnt;         /* Number of transactions processed by the bank tile */
-  ulong net_out_tx_bytes;          /* Number of bytes sent by the net or sock tile */
-};
-
-typedef struct fd_gui_tile_stats fd_gui_tile_stats_t;
-
 struct fd_gui_slot {
   ulong slot;
   ulong parent_slot;
   ulong vote_slot;
-  ulong reset_slot;
+
   long  completed_time;
   uint  max_compute_units;
   int   mine;
@@ -514,15 +522,9 @@ struct fd_gui_slot {
   uint nonvote_success;
   uint nonvote_failed;
 
-  /* Some slot info is only tracked for our own leader slots. These
-     slots are kept in a separate buffer. */
-  ulong leader_history_idx;
-
-  fd_gui_txn_waterfall_t waterfall_begin[ 1 ];
-  fd_gui_txn_waterfall_t waterfall_end[ 1 ];
-
-  fd_gui_tile_stats_t tile_stats_begin[ 1 ];
-  fd_gui_tile_stats_t tile_stats_end[ 1 ];
+  fd_hash_t block_id;         /* block id (merkle root of last FEC set) */
+  fd_hash_t parent_block_id;  /* parent block id */
+  ulong     block_height;     /* block height, ULONG_MAX if not yet known */
 
   struct {
     ulong start_offset; /* gui->shreds.history[ start_offset % FD_GUI_SHREDS_HISTORY_SZ ] is the first shred event in
@@ -533,6 +535,51 @@ struct fd_gui_slot {
 };
 
 typedef struct fd_gui_slot fd_gui_slot_t;
+
+/* Element type for the staged (non-rooted) slot maps.
+   Two fd_map_chain instances share the same pool:
+   - staged_by_block: keyed by block_id (fd_hash_t)
+   - staged_by_slot:  keyed by slot (ulong), MAP_MULTI */
+
+struct fd_gui_staged_slot {
+  fd_gui_slot_t slot[ 1 ];
+
+  struct { ulong next, prev; } block_map;
+  struct { ulong next, prev; } slot_map;
+  struct { ulong next; } pool;
+};
+
+typedef struct fd_gui_staged_slot fd_gui_staged_slot_t;
+
+#define POOL_NAME fd_gui_staged_pool
+#define POOL_T    fd_gui_staged_slot_t
+#define POOL_NEXT pool.next
+#include "../../util/tmpl/fd_pool.c"
+
+#define MAP_NAME  fd_gui_staged_by_block
+#define MAP_ELE_T fd_gui_staged_slot_t
+#define MAP_KEY_T fd_hash_t
+#define MAP_KEY   slot->block_id
+#define MAP_IDX_T ulong
+#define MAP_NEXT  block_map.next
+#define MAP_PREV  block_map.prev
+#define MAP_KEY_HASH(k,s) (fd_hash( (s), (k)->uc, sizeof(fd_hash_t) ))
+#define MAP_KEY_EQ(k0,k1) (!memcmp( (k0)->uc, (k1)->uc, 32UL ))
+#define MAP_OPTIMIZE_RANDOM_ACCESS_REMOVAL 1
+#include "../../util/tmpl/fd_map_chain.c"
+
+#define MAP_NAME  fd_gui_staged_by_slot
+#define MAP_ELE_T fd_gui_staged_slot_t
+#define MAP_KEY_T ulong
+#define MAP_KEY   slot->slot
+#define MAP_IDX_T ulong
+#define MAP_NEXT  slot_map.next
+#define MAP_PREV  slot_map.prev
+#define MAP_KEY_HASH(k,s) fd_ulong_hash( (*(k)) ^ (s) )
+#define MAP_KEY_EQ(k0,k1) ((*(k0))==(*(k1)))
+#define MAP_MULTI 1
+#define MAP_OPTIMIZE_RANDOM_ACCESS_REMOVAL 1
+#include "../../util/tmpl/fd_map_chain.c"
 
 struct fd_gui {
   fd_http_server_t * http;
@@ -637,9 +684,11 @@ struct fd_gui {
     ulong execle_tile_cnt;
     ulong shred_tile_cnt;
 
-    ulong slot_rooted;
-    ulong slot_optimistically_confirmed;
-    ulong slot_completed;
+    ulong     slot_rooted;
+    fd_hash_t block_id_rooted;
+    ulong     slot_optimistically_confirmed;
+    ulong     slot_completed;
+    fd_hash_t block_id_completed;
     ulong slot_estimated;
     ulong slot_caught_up;
     ulong slot_repair;
@@ -691,7 +740,13 @@ struct fd_gui {
     fd_gui_scheduler_counts_t scheduler_counts_snap[ FD_GUI_SCHEDULER_COUNT_SNAP_CNT ][ 1 ];
   } summary;
 
-  fd_gui_slot_t slots[ FD_GUI_SLOTS_CNT ][ 1 ];
+  fd_gui_slot_t              archive[ FD_GUI_ARCHIVE_CNT ][ 1 ]; /* ring buffer for rooted slots */
+  ulong                      archive_oldest_slot;                 /* smallest valid slot in archive */
+  ulong                      archive_newest_slot;                 /* largest valid slot in archive (== slot_rooted) */
+
+  fd_gui_staged_slot_t *     staged_pool;                         /* pool join for staged entries */
+  fd_gui_staged_by_block_t * staged_by_block;                     /* map chain keyed by block_id */
+  fd_gui_staged_by_slot_t *  staged_by_slot;                      /* map chain keyed by slot (MAP_MULTI) */
 
   /* used for estimating slot duration */
   fd_gui_turbine_slot_t turbine_slots[ FD_GUI_TURBINE_RECV_TIMESTAMPS ];
@@ -908,10 +963,6 @@ fd_gui_handle_epoch_info( fd_gui_t *                  gui,
                           long                        now );
 
 void
-fd_gui_handle_notarization_update( fd_gui_t *                        gui,
-                                   fd_tower_slot_confirmed_t const * notar );
-
-void
 fd_gui_handle_tower_update( fd_gui_t *                   gui,
                             fd_tower_slot_done_t const * msg,
                             long                         now );
@@ -921,6 +972,24 @@ fd_gui_handle_replay_update( fd_gui_t *                         gui,
                              fd_replay_slot_completed_t const * slot_completed,
                              ulong                              vote_slot,
                              long                               now );
+
+void
+fd_gui_handle_root_advanced( fd_gui_t *                        gui,
+                             fd_replay_root_advanced_t const * msg );
+
+void
+fd_gui_handle_oc_advanced( fd_gui_t * gui,
+                           ulong      slot );
+
+void
+fd_gui_handle_replay_reset( fd_gui_t *        gui,
+                            fd_hash_t const * completed_block_id,
+                            ulong             completed_slot,
+                            long              now );
+
+void
+fd_gui_handle_our_vote_latency( fd_gui_t * gui,
+                                long       vote_distance );
 
 void
 fd_gui_handle_genesis_hash( fd_gui_t *        gui,
@@ -943,26 +1012,73 @@ fd_gui_current_epoch_idx( fd_gui_t * gui ) {
 }
 
 static inline fd_gui_slot_t *
-fd_gui_get_slot( fd_gui_t const * gui, ulong _slot ) {
-  fd_gui_slot_t const * slot = gui->slots[ _slot % FD_GUI_SLOTS_CNT ];
-  if( FD_UNLIKELY( slot->slot==ULONG_MAX || _slot==ULONG_MAX || slot->slot!=_slot ) ) return NULL;
-  return (fd_gui_slot_t *)slot;
+fd_gui_get_slot_by_num( fd_gui_t const * gui, ulong _slot ) {
+  if( FD_UNLIKELY( _slot==ULONG_MAX ) ) return NULL;
+
+  /* 1. Try staged_by_slot (non-rooted fork tree) */
+  if( FD_LIKELY( gui->staged_pool ) ) {
+    fd_gui_staged_slot_t const * ele = fd_gui_staged_by_slot_ele_query_const( gui->staged_by_slot, &_slot, NULL, gui->staged_pool );
+    if( ele ) return (fd_gui_slot_t *)ele->slot;
+  }
+
+  /* 2. Try archive (rooted slots ring buffer) */
+  fd_gui_slot_t const * slot = gui->archive[ _slot % FD_GUI_ARCHIVE_CNT ];
+  if( FD_LIKELY( slot->slot==_slot ) ) return (fd_gui_slot_t *)slot;
+
+  return NULL;
 }
 
 static inline fd_gui_slot_t const *
-fd_gui_get_slot_const( fd_gui_t const * gui, ulong _slot ) {
-  return fd_gui_get_slot( gui, _slot );
+fd_gui_get_slot_by_num_const( fd_gui_t const * gui, ulong _slot ) {
+  return fd_gui_get_slot_by_num( gui, _slot );
+}
+
+/* fd_gui_get_slot_by_block_id returns a handle to the staged
+   slot with the given block_id, or NULL if not found.  Only
+   searches the staged map (rooted slots in archive are not
+   indexed by block_id). */
+
+static inline fd_gui_slot_t *
+fd_gui_get_slot_by_block_id( fd_gui_t const *  gui,
+                              fd_hash_t const * block_id ) {
+  if( FD_UNLIKELY( !gui->staged_pool ) ) return NULL;
+  fd_gui_staged_slot_t const * ele = fd_gui_staged_by_block_ele_query_const( gui->staged_by_block, block_id, NULL, gui->staged_pool );
+  if( ele ) return (fd_gui_slot_t *)ele->slot;
+  return NULL;
+}
+
+/* fd_gui_get_parent follows the parent link of a slot.
+   Tries parent_block_id first (staged map), then falls
+   back to parent_slot (archive).  Verifies that the
+   parent's block_id matches the child's parent_block_id
+   when both are available. */
+
+static inline fd_gui_slot_t *
+fd_gui_get_parent( fd_gui_t const *      gui,
+                   fd_gui_slot_t const * slot ) {
+  if( FD_UNLIKELY( !slot ) ) return NULL;
+
+  /* Try block_id path first if parent_block_id is set */
+  if( FD_LIKELY( memcmp( slot->parent_block_id.uc, &(fd_hash_t){0}, sizeof(fd_hash_t) ) ) ) {
+    fd_gui_slot_t * parent = fd_gui_get_slot_by_block_id( gui, &slot->parent_block_id );
+    if( FD_LIKELY( parent ) ) {
+      FD_TEST( !memcmp( parent->block_id.uc, slot->parent_block_id.uc, sizeof(fd_hash_t) ) );
+      return parent;
+    }
+  }
+
+  /* Fall back to slot number (archive) */
+  return fd_gui_get_slot_by_num( gui, slot->parent_slot );
 }
 
 static inline fd_gui_leader_slot_t *
 fd_gui_get_leader_slot( fd_gui_t const * gui, ulong _slot ) {
-  fd_gui_slot_t const * slot = fd_gui_get_slot( gui, _slot );
-  if( FD_UNLIKELY( !slot
-                || !slot->mine
-                || slot->leader_history_idx==ULONG_MAX
-                || slot->leader_history_idx + FD_GUI_LEADER_CNT < gui->leader_slots_cnt
-                || gui->leader_slots[ slot->leader_history_idx % FD_GUI_LEADER_CNT ]->slot!=_slot ) ) return NULL;
-  return (fd_gui_leader_slot_t *)gui->leader_slots[ slot->leader_history_idx % FD_GUI_LEADER_CNT ];
+  ulong end = (gui->leader_slots_cnt >= FD_GUI_LEADER_CNT) ? gui->leader_slots_cnt - FD_GUI_LEADER_CNT : 0UL;
+  for( ulong i=gui->leader_slots_cnt; i>end; i-- ) {
+    fd_gui_leader_slot_t * lslot = (fd_gui_leader_slot_t *)gui->leader_slots[ (i-1UL) % FD_GUI_LEADER_CNT ];
+    if( FD_LIKELY( lslot->slot==_slot ) ) return lslot;
+  }
+  return NULL;
 }
 
 static inline fd_gui_leader_slot_t const *
@@ -975,42 +1091,43 @@ fd_gui_get_leader_slot_const( fd_gui_t const * gui, ulong _slot ) {
 static inline fd_gui_slot_t *
 fd_gui_get_root_slot( fd_gui_t const * gui,
                       ulong            slot ) {
-  fd_gui_slot_t * c = fd_gui_get_slot( gui, slot );
+  fd_gui_slot_t * c = fd_gui_get_slot_by_num( gui, slot );
   while( c ) {
     if( FD_UNLIKELY( c->level>=FD_GUI_SLOT_LEVEL_ROOTED ) ) return c;
-    c = fd_gui_get_slot( gui, c->parent_slot );
+    c = fd_gui_get_parent( gui, c );
   }
   return NULL;
 }
 
-/* fd_gui_slot_is_ancestor returns 1 if anc is known to be an ancestor
-   of slot (on the same fork), 0 otherwise. */
+/* fd_gui_slot_is_ancestor returns 1 if anc_block_id is known to be
+   an ancestor of des_block_id (on the same fork), 0 otherwise. */
 static inline int
-fd_gui_slot_is_ancestor( fd_gui_t const * gui,
-                         ulong            anc,
-                         ulong            slot ) {
-  fd_gui_slot_t * c = fd_gui_get_slot( gui, slot );
+fd_gui_slot_is_ancestor( fd_gui_t const *  gui,
+                         fd_hash_t const * anc_block_id,
+                         fd_hash_t const * des_block_id ) {
+  fd_gui_slot_t * c = fd_gui_get_slot_by_block_id( gui, des_block_id );
   while( c ) {
-    if( FD_UNLIKELY( c->slot==anc ) ) return 1;
-    c = fd_gui_get_slot( gui, c->parent_slot );
+    if( FD_UNLIKELY( !memcmp( c->block_id.uc, anc_block_id->uc, sizeof(fd_hash_t) ) ) ) return 1;
+    c = fd_gui_get_parent( gui, c );
   }
   return 0;
 }
 
-/* fd_gui_get_parent_slot_on_fork returns a handle to the parent of slot
-   on the fork ending on frontier_slot.  If slot is unknown or skipped,
-   the closest (by slot number) valid parent on the fork is returned.
+/* fd_gui_get_parent_slot_on_fork returns a handle to the parent of
+   slot on the fork ending at frontier_block_id.  If slot is unknown
+   or skipped, the closest (by slot number) valid parent on the fork
+   is returned.
 
-   NULL if slot is not an ancestor of frontier slot or if the parent is
-   unknown. */
+   NULL if slot is not an ancestor of the frontier or if the parent
+   is unknown. */
 static inline fd_gui_slot_t *
-fd_gui_get_parent_slot_on_fork( fd_gui_t const * gui,
-                                ulong            frontier_slot,
-                                ulong            slot ) {
-  fd_gui_slot_t * c = fd_gui_get_slot( gui, frontier_slot );
+fd_gui_get_parent_slot_on_fork( fd_gui_t const *  gui,
+                                fd_hash_t const * frontier_block_id,
+                                ulong             slot ) {
+  fd_gui_slot_t * c = fd_gui_get_slot_by_block_id( gui, frontier_block_id );
   while( c ) {
     if( FD_UNLIKELY( c->slot<=slot ) ) return NULL;
-    fd_gui_slot_t * p = fd_gui_get_slot( gui, c->parent_slot );
+    fd_gui_slot_t * p = fd_gui_get_parent( gui, c );
     if( FD_UNLIKELY( p && p->slot<=slot-1UL ) ) return p;
     c = p;
   }
@@ -1018,16 +1135,16 @@ fd_gui_get_parent_slot_on_fork( fd_gui_t const * gui,
 }
 
 /* fd_gui_is_skipped_on_fork returns 1 if slot is skipped on the fork
-   starting at anc and ending at des, 0 otherwise. */
+   starting at anc_block_id and ending at des_block_id, 0 otherwise. */
 static inline int
-fd_gui_is_skipped_on_fork( fd_gui_t const * gui,
-                           ulong            anc,
-                           ulong            des,
-                           ulong            slot ) {
-  fd_gui_slot_t const * c = fd_gui_get_slot( gui, des );
+fd_gui_is_skipped_on_fork( fd_gui_t const *  gui,
+                           fd_hash_t const * anc_block_id,
+                           fd_hash_t const * des_block_id,
+                           ulong             slot ) {
+  fd_gui_slot_t const * c = fd_gui_get_slot_by_block_id( gui, des_block_id );
   while( c ) {
-    if( FD_UNLIKELY( anc==c->slot ) ) return 0; /* on the fork, not skipped */
-    fd_gui_slot_t const * p = fd_gui_get_slot( gui, c->parent_slot );
+    if( FD_UNLIKELY( !memcmp( c->block_id.uc, anc_block_id->uc, sizeof(fd_hash_t) ) ) ) return 0; /* on the fork, not skipped */
+    fd_gui_slot_t const * p = fd_gui_get_parent( gui, c );
     if( FD_UNLIKELY( p && p->slot<slot && c->slot>slot ) ) return 1; /* in-between two nodes, skipped */
     c = p;
   }
