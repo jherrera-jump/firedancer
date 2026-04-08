@@ -24,7 +24,8 @@ fd_rust_cast_double_to_ulong( double f ) {
   if( fd_dblbits_bexp( u )==0x7FFUL ) {
     /* Check if the mantissa is 0 (infinity) */
     if( fd_dblbits_mant( u )==0 ) {
-      return ULONG_MAX;
+      /* -INF saturates to 0, +INF saturates to ULONG_MAX */
+      return fd_dblbits_sign( u ) ? 0 : ULONG_MAX;
     } else {
       /* NaN case */
       return 0;
