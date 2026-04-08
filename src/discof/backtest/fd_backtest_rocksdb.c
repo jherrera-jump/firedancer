@@ -3,7 +3,7 @@
 #include "../../ballet/shred/fd_shred.h"
 #include "../../flamenco/types/fd_types.h"
 
-#ifdef FD_HAS_ROCKSDB
+#if FD_HAS_ROCKSDB
 #include <rocksdb/c.h>
 #else
 #include "../../../opt/include/rocksdb/c.h"

@@ -965,7 +965,11 @@ fd_ulong_svw_dec_tail( uchar const * b,
    evaluation, and the final size be at most ULONG_MAX-page_sz+1. */
 
 #define FD_LAYOUT_INIT              (0UL)
+#if FD_HAS_DEEPASAN
+#define FD_LAYOUT_APPEND( l, a, s ) (FD_ULONG_ALIGN_UP( (l), (a) ) + (s) + 8UL)
+#else
 #define FD_LAYOUT_APPEND( l, a, s ) (FD_ULONG_ALIGN_UP( (l), (a) ) + (s))
+#endif
 #define FD_LAYOUT_FINI( l, a )      FD_ULONG_ALIGN_UP( (l), (a) )
 
 /* FD_SCRATCH_ALLOC_{INIT,APPEND,FINI} are utility macros for allocating
@@ -995,6 +999,19 @@ fd_ulong_svw_dec_tail( uchar const * b,
       FD_SCRATCH_ALLOC_FINI( foo, 32UL );
    */
 #define FD_SCRATCH_ALLOC_INIT(   layout, base )  ulong _##layout = (ulong)(base)
+#if FD_HAS_DEEPASAN
+#define FD_SCRATCH_ALLOC_APPEND( layout, align, sz ) (__extension__({                               \
+    ulong _align = (align);                                                                         \
+    ulong _sz    = (sz);                                                                            \
+    ulong _scratch_alloc = fd_ulong_align_up( _##layout, (_align) );                                \
+    fd_asan_poison( (void *)_##layout, _scratch_alloc - _##layout );                                \
+    fd_asan_poison( (void *)(_scratch_alloc + _sz), 8UL );                                          \
+    if( FD_UNLIKELY( __builtin_uaddl_overflow( _scratch_alloc, _sz + 8UL, &_##layout ) ) )          \
+      FD_LOG_CRIT(( "FD_SCRATCH_ALLOC_APPEND( "#layout", %lu, %lu ) overflowed ("#layout"=0x%lx)",  \
+        _align, _sz, _scratch_alloc ));                                                             \
+    (void *)_scratch_alloc;                                                                         \
+  }))
+#else
 #define FD_SCRATCH_ALLOC_APPEND( layout, align, sz ) (__extension__({                               \
     ulong _align = (align);                                                                         \
     ulong _sz    = (sz);                                                                            \
@@ -1004,6 +1021,7 @@ fd_ulong_svw_dec_tail( uchar const * b,
         _align, _sz, _scratch_alloc ));                                                             \
     (void *)_scratch_alloc;                                                                         \
   }))
+#endif
 #define FD_SCRATCH_ALLOC_FINI( layout, align ) (_##layout = FD_ULONG_ALIGN_UP( _##layout, (align) ) )
 
 #define FD_SCRATCH_ALLOC_PUBLISH( layout ) (__extension__({            \

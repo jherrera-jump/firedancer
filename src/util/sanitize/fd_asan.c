@@ -2,7 +2,7 @@
 #include "../log/fd_log.h"
 #include "fd_asan.h"
 
-#ifdef FD_HAS_DEEPASAN_WATCH
+#if FD_HAS_DEEPASAN_WATCH
 #include "fd_backtrace.h"
 #include <stdio.h>
 

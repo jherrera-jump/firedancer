@@ -72,12 +72,12 @@ typedef struct fd_spad_private fd_spad_t;
 
 /* Asserts that the default spad alignment is greater than or equal to
    the asan and msan alignment when DEEPASAN / MSAN is enabled. */
-#ifdef FD_HAS_DEEPASAN
+#if FD_HAS_DEEPASAN
 FD_STATIC_ASSERT( FD_SPAD_ALLOC_ALIGN_DEFAULT >= FD_ASAN_ALIGN,
                   "default spad alignment must be greater than or equal to asan alignment" );
 #endif
 
-#ifdef FD_HAS_MSAN
+#if FD_HAS_MSAN
 FD_STATIC_ASSERT( FD_SPAD_ALLOC_ALIGN_DEFAULT >= FD_MSAN_ALIGN,
                   "default spad alignment must be greater than or equal to msan alignment" );
 #endif

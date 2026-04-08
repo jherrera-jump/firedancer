@@ -78,7 +78,7 @@ FD_PROTOTYPES_BEGIN
 
    FIXME: CONST CORRECT VERSIONS? */
 
-#ifdef FD_HAS_DEEPASAN
+#if FD_HAS_DEEPASAN
 #define FD_ASAN_ALIGN (8UL)
 #endif
 
@@ -101,7 +101,7 @@ __sanitizer_finish_switch_fiber( void *        fake_stack_save,
                                  void const ** stack_bottom_old,
                                  ulong *       stack_size_old );
 
-#ifdef FD_HAS_DEEPASAN_WATCH
+#if FD_HAS_DEEPASAN_WATCH
 void fd_asan_check_watch( int poison, void * addr, ulong sz );
 void fd_asan_watch( void const * addr );
 static inline void * fd_asan_poison  ( void * addr, ulong sz ) { __asan_poison_memory_region  ( addr, sz ); fd_asan_check_watch( 1, addr, sz ); return addr; }
