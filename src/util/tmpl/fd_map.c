@@ -383,6 +383,9 @@ MAP_(insert)( MAP_T *   map,
 static inline void
 MAP_(remove)( MAP_T * map,
               MAP_T * entry ) {
+# if FD_TMPL_USE_HANDHOLDING
+  if( FD_UNLIKELY( MAP_(key_inval)( entry->MAP_KEY ) ) ) FD_LOG_CRIT(( "entry is not valid" ));
+# endif
   ulong slot = MAP_(slot_idx)( map, entry );
 
   for(;;) {

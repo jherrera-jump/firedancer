@@ -438,7 +438,10 @@ MAP_(remove)( MAP_T * map,
               MAP_T * entry ) {
   MAP_(private_t) * hdr = MAP_(private_from_slot)( map );
 
-  /* FIXME: CONSIDER VALIDATING KEY_CNT AND/OR ENTRY ISN'T VALID */
+# if FD_TMPL_USE_HANDHOLDING
+  if( FD_UNLIKELY( !hdr->key_cnt                       ) ) FD_LOG_CRIT(( "map is empty" ));
+  if( FD_UNLIKELY( MAP_(key_inval)( entry->MAP_KEY )   ) ) FD_LOG_CRIT(( "entry is not valid" ));
+# endif
   hdr->key_cnt--;
 
   ulong slot_mask = hdr->slot_mask;
