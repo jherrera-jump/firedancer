@@ -20,6 +20,7 @@ register_voters( fd_votes_t * votes, fd_pubkey_t * voters, ulong * stakes, ulong
 
 void
 test_votes_simple( void ) {
+  fd_asan_unpoison( scratch, SCRATCH_MAX );
   ulong slot_max = 8;
   ulong vtr_max  = 4;
   FD_TEST( fd_votes_footprint( slot_max, vtr_max ) <= SCRATCH_MAX );
@@ -85,6 +86,7 @@ test_votes_simple( void ) {
 
 void
 test_votes_spam_block_ids_per_slot( void ) {
+  fd_asan_unpoison( scratch, SCRATCH_MAX );
   ulong slot_max     = 8;
   ulong vtr_max      = 64;
   ulong attacker_cnt = 32;
@@ -168,6 +170,7 @@ test_votes_spam_block_ids_per_slot( void ) {
 
 void
 test_votes_spam_many_slots( void ) {
+  fd_asan_unpoison( scratch, SCRATCH_MAX );
   ulong slot_max     = 8;
   ulong vtr_max      = 16;
   ulong attacker_cnt = 8;

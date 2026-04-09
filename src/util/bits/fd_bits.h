@@ -1005,6 +1005,7 @@ fd_ulong_svw_dec_tail( uchar const * b,
     ulong _sz    = (sz);                                                                            \
     ulong _scratch_alloc = fd_ulong_align_up( _##layout, (_align) );                                \
     fd_asan_poison( (void *)_##layout, _scratch_alloc - _##layout );                                \
+    fd_asan_unpoison( (void *)_scratch_alloc, _sz );                                                \
     fd_asan_poison( (void *)(_scratch_alloc + _sz), 8UL );                                          \
     if( FD_UNLIKELY( __builtin_uaddl_overflow( _scratch_alloc, _sz + 8UL, &_##layout ) ) )          \
       FD_LOG_CRIT(( "FD_SCRATCH_ALLOC_APPEND( "#layout", %lu, %lu ) overflowed ("#layout"=0x%lx)",  \

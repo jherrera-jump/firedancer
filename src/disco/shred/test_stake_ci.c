@@ -146,6 +146,7 @@ check_destinations( fd_stake_ci_t const * info,
 
 static void
 test_stake_msg_staked_only( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_stake_msg_init( info, generate_stake_msg( stake_msg, 0UL, "ABC"   ) );  fd_stake_ci_stake_msg_fini( info );
@@ -165,6 +166,7 @@ test_stake_msg_staked_only( void ) {
 
 static void
 test_stake_msg_unstaked_only( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   /* We need one epoch and one staked node */
@@ -185,6 +187,7 @@ test_stake_msg_unstaked_only( void ) {
 
 static void
 test_stake_msg_transitions( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_stake_msg_init( info, generate_stake_msg( stake_msg, 0UL, "ABCD" ) );  fd_stake_ci_stake_msg_fini( info );
@@ -221,6 +224,7 @@ test_stake_msg_transitions( void ) {
 
 static void
 test_stake_msg_startup( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   /* Before it has any information, no epoch should be known */
@@ -237,6 +241,7 @@ test_stake_msg_startup( void ) {
   fd_stake_ci_delete( fd_stake_ci_leave( info ) );
 
   /* Start over and make just A staked, which means I is unstaked */
+  fd_asan_unpoison( _info, sizeof(_info) );
   info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
   fd_stake_ci_stake_msg_init( info, generate_stake_msg( stake_msg, 0UL, "A"   ) );  fd_stake_ci_stake_msg_fini( info );
   check_destinations( info, 0UL, "A", "I"      );
@@ -246,6 +251,7 @@ test_stake_msg_startup( void ) {
 
 static void
 test_stake_msg_skip_ahead( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_stake_msg_init( info, generate_stake_msg( stake_msg, 0UL, "ABC"   ) );  fd_stake_ci_stake_msg_fini( info );
@@ -264,6 +270,7 @@ test_stake_msg_skip_ahead( void ) {
 
 static void
 test_stake_msg_cancel( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_stake_msg_init( info, generate_stake_msg( stake_msg, 0UL, "ABC"   ) );  fd_stake_ci_stake_msg_fini( info );
@@ -284,6 +291,7 @@ test_stake_msg_cancel( void ) {
 
 static void
 test_stake_msg_ordering( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_stake_msg_init( info, generate_stake_msg( stake_msg, 0UL, "ABC"   ) );  fd_stake_ci_stake_msg_fini( info );
@@ -306,6 +314,7 @@ test_stake_msg_ordering( void ) {
 
 static void
 test_stake_msg_destaking( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_stake_msg_init( info, generate_stake_msg( stake_msg, 0UL, "ABCDEF" ) );  fd_stake_ci_stake_msg_fini( info );
@@ -331,6 +340,7 @@ test_stake_msg_destaking( void ) {
 
 static void
 test_stake_msg_staked_by_vote( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
   fd_stake_weight_msg_t * msg;
 
@@ -369,6 +379,7 @@ test_stake_msg( void ) {
 
 static void
 test_epoch_msg_staked_only( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_epoch_msg_init( info, generate_epoch_msg( epoch_msg, 0UL, "ABC"   ) );  fd_stake_ci_epoch_msg_fini( info );
@@ -388,6 +399,7 @@ test_epoch_msg_staked_only( void ) {
 
 static void
 test_epoch_msg_unstaked_only( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   /* We need one epoch and one staked node */
@@ -408,6 +420,7 @@ test_epoch_msg_unstaked_only( void ) {
 
 static void
 test_epoch_msg_transitions( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_epoch_msg_init( info, generate_epoch_msg( epoch_msg, 0UL, "ABCD" ) );  fd_stake_ci_epoch_msg_fini( info );
@@ -444,6 +457,7 @@ test_epoch_msg_transitions( void ) {
 
 static void
 test_epoch_msg_startup( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   /* Before it has any information, no epoch should be known */
@@ -460,6 +474,7 @@ test_epoch_msg_startup( void ) {
   fd_stake_ci_delete( fd_stake_ci_leave( info ) );
 
   /* Start over and make just A staked, which means I is unstaked */
+  fd_asan_unpoison( _info, sizeof(_info) );
   info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
   fd_stake_ci_epoch_msg_init( info, generate_epoch_msg( epoch_msg, 0UL, "A"   ) );  fd_stake_ci_epoch_msg_fini( info );
   check_destinations( info, 0UL, "A", "I"      );
@@ -469,6 +484,7 @@ test_epoch_msg_startup( void ) {
 
 static void
 test_epoch_msg_skip_ahead( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_epoch_msg_init( info, generate_epoch_msg( epoch_msg, 0UL, "ABC"   ) );  fd_stake_ci_epoch_msg_fini( info );
@@ -487,6 +503,7 @@ test_epoch_msg_skip_ahead( void ) {
 
 static void
 test_epoch_msg_cancel( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_epoch_msg_init( info, generate_epoch_msg( epoch_msg, 0UL, "ABC"   ) );  fd_stake_ci_epoch_msg_fini( info );
@@ -507,6 +524,7 @@ test_epoch_msg_cancel( void ) {
 
 static void
 test_epoch_msg_ordering( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_epoch_msg_init( info, generate_epoch_msg( epoch_msg, 0UL, "ABC"   ) );  fd_stake_ci_epoch_msg_fini( info );
@@ -529,6 +547,7 @@ test_epoch_msg_ordering( void ) {
 
 static void
 test_epoch_msg_destaking( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_epoch_msg_init( info, generate_epoch_msg( epoch_msg, 0UL, "ABCDEF" ) );  fd_stake_ci_epoch_msg_fini( info );
@@ -554,6 +573,7 @@ test_epoch_msg_destaking( void ) {
 
 static void
 test_epoch_msg_staked_by_vote( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
   fd_epoch_info_msg_t * msg;
 
@@ -592,6 +612,7 @@ test_epoch_msg( void ) {
 
 static void
 test_changing_contact_info( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_stake_msg_init( info, generate_stake_msg( stake_msg, 0UL, "A" ) );  fd_stake_ci_stake_msg_fini( info );
@@ -630,6 +651,7 @@ test_limits( void ) {
 
      Id weights cannot include more than MAX_SHRED_DESTS public keys.
      Any beyond that get truncated and counted as excluded stake. */
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   for( ulong stake_weight_cnt=MAX_COMPRESSED_STAKE_WEIGHTS-2UL; stake_weight_cnt<=MAX_COMPRESSED_STAKE_WEIGHTS+1UL; stake_weight_cnt++ ) {
@@ -686,6 +708,7 @@ test_limits( void ) {
 
 static void
 test_set_identity( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   fd_stake_ci_stake_msg_init( info, generate_stake_msg( stake_msg, 0UL, "ABCDEF" ) );  fd_stake_ci_stake_msg_fini( info );
@@ -721,6 +744,7 @@ test_set_identity( void ) {
 
 static void
 test_dest_update( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   /* Set up initial state with only staked nodes */
@@ -829,6 +853,7 @@ test_dest_update_overflow( void ) {
      fd_stake_ci_dest_update.  This exercises ci_dest_add_one_unstaked
      when the table is already at capacity and should hit the
      FD_LOG_WARNING. */
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
   /* Verify the table contains the identity and is otherwise empty */
   FD_TEST( fd_shred_dest_cnt_all( info->epoch_info[0].sdest )==1 );
@@ -887,6 +912,7 @@ test_dest_update_overflow( void ) {
 
 static void
 test_dest_remove( void ) {
+  fd_asan_unpoison( _info, sizeof(_info) );
   fd_stake_ci_t * info = fd_stake_ci_join( fd_stake_ci_new( _info, identity_key ) );
 
   /* Set up initial state with some staked and unstaked nodes */

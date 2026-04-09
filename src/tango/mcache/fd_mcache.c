@@ -8,24 +8,16 @@ fd_mcache_align( void ) {
 ulong
 fd_mcache_footprint( ulong depth,
                      ulong app_sz ) {
+  if( FD_UNLIKELY( depth<FD_MCACHE_BLOCK                  ) ) return 0UL;
+  if( FD_UNLIKELY( depth>ULONG_MAX/sizeof(fd_frag_meta_t) ) ) return 0UL;
+  if( FD_UNLIKELY( !fd_ulong_is_pow2( depth )             ) ) return 0UL;
 
-  if( FD_UNLIKELY( depth<FD_MCACHE_BLOCK                  ) ) return 0UL; /* too small depth */
-  if( FD_UNLIKELY( depth>ULONG_MAX/sizeof(fd_frag_meta_t) ) ) return 0UL; /* too large depth */
-  if( FD_UNLIKELY( !fd_ulong_is_pow2( depth )             ) ) return 0UL; /* non-power-of-two depth */
-  ulong meta_footprint = depth*sizeof( fd_frag_meta_t ); /* no overflow */
-  if( FD_UNLIKELY( fd_ulong_align_up( meta_footprint, FD_MCACHE_ALIGN )<meta_footprint ) ) return 0UL; /* too large depth */
-  meta_footprint = fd_ulong_align_up( meta_footprint, FD_MCACHE_ALIGN );
-
-  ulong app_footprint = fd_ulong_align_up( app_sz, FD_MCACHE_ALIGN );
-  if( FD_UNLIKELY( app_footprint<app_sz ) ) return 0UL; /* overflow */
-
-  ulong footprint = meta_footprint + app_footprint; /* meta and app */
-  if( footprint<meta_footprint ) return 0UL; /* overflow */
-
-  footprint += sizeof(fd_mcache_private_hdr_t); /* header and seq */
-  if( FD_UNLIKELY( footprint<sizeof(fd_mcache_private_hdr_t) ) ) return 0UL; /* overflow */
-
-  return footprint;
+  ulong l = FD_LAYOUT_INIT;
+  l = FD_LAYOUT_APPEND( l, FD_MCACHE_ALIGN, 128UL                           );
+  l = FD_LAYOUT_APPEND( l, FD_MCACHE_ALIGN, FD_MCACHE_SEQ_CNT*sizeof(ulong) );
+  l = FD_LAYOUT_APPEND( l, FD_MCACHE_ALIGN, depth*sizeof(fd_frag_meta_t)    );
+  l = FD_LAYOUT_APPEND( l, FD_MCACHE_ALIGN, app_sz                          );
+  return FD_LAYOUT_FINI( l, FD_MCACHE_ALIGN );
 }
 
 void *

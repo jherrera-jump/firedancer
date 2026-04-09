@@ -570,7 +570,12 @@ test_bank_stake_delegations_dynamic_sizing( void * mem ) {
   FD_TEST( fd_ulong_is_aligned( (ulong)root_mem_small,     fd_stake_delegations_align() ) );
   ulong const root_to_epoch_small = (ulong)epoch_leaders_small - (ulong)root_mem_small;
   FD_TEST( root_to_epoch_small>=stake_footprint_small );
+#if !FD_HAS_DEEPASAN
+  /* In deepasan mode, FD_SCRATCH_ALLOC_APPEND adds 8-byte redzones
+     that inflate the gap between allocations beyond the normal
+     alignment padding. */
   FD_TEST( root_to_epoch_small<(stake_footprint_small+FD_EPOCH_LEADERS_ALIGN) );
+#endif
 
   /* If frontier memcpy uses the wrong footprint, this region gets
      clobbered because it sits directly after the frontier stake set. */
@@ -644,7 +649,12 @@ test_bank_stake_delegations_dynamic_sizing( void * mem ) {
   FD_TEST( fd_ulong_is_aligned( (ulong)root_mem_large,     fd_stake_delegations_align() ) );
   ulong const root_to_epoch_large = (ulong)epoch_leaders_large - (ulong)root_mem_large;
   FD_TEST( root_to_epoch_large>=stake_footprint_large );
+#if !FD_HAS_DEEPASAN
+  /* In deepasan mode, FD_SCRATCH_ALLOC_APPEND adds 8-byte redzones
+     that inflate the gap between allocations beyond the normal
+     alignment padding. */
   FD_TEST( root_to_epoch_large<(stake_footprint_large+FD_EPOCH_LEADERS_ALIGN) );
+#endif
   FD_TEST( stake_footprint_large > stake_footprint_small );
   FD_TEST( root_to_epoch_large > root_to_epoch_small );
 }

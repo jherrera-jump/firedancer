@@ -30,20 +30,16 @@ fd_dcache_align( void ) {
 ulong
 fd_dcache_footprint( ulong data_sz,
                      ulong app_sz ) {
+  /* Overflow checks */
+  if( FD_UNLIKELY( fd_ulong_align_up( data_sz, FD_DCACHE_ALIGN )<data_sz ) ) return 0UL;
+  if( FD_UNLIKELY( fd_ulong_align_up( app_sz,  FD_DCACHE_ALIGN )<app_sz  ) ) return 0UL;
 
-  ulong data_footprint = fd_ulong_align_up( data_sz, FD_DCACHE_ALIGN );
-  if( FD_UNLIKELY( data_footprint<data_sz ) ) return 0UL; /* overflow */
-
-  ulong app_footprint  = fd_ulong_align_up( app_sz,  FD_DCACHE_ALIGN );
-  if( FD_UNLIKELY( app_footprint<app_sz ) ) return 0UL; /* overflow */
-
-  ulong footprint = data_footprint + app_footprint; /* data and app */
-  if( FD_UNLIKELY( footprint<data_footprint ) ) return 0UL; /* overflow */
-
-  footprint += sizeof(fd_dcache_private_hdr_t); /* header and guard */
-  if( FD_UNLIKELY( footprint<sizeof(fd_dcache_private_hdr_t) ) ) return 0UL; /* overflow */
-
-  return footprint;
+  ulong l = FD_LAYOUT_INIT;
+  l = FD_LAYOUT_APPEND( l, FD_DCACHE_SLOT_ALIGN, 128UL                    );
+  l = FD_LAYOUT_APPEND( l, FD_DCACHE_SLOT_ALIGN, FD_DCACHE_GUARD_FOOTPRINT );
+  l = FD_LAYOUT_APPEND( l, FD_DCACHE_ALIGN,      data_sz                   );
+  l = FD_LAYOUT_APPEND( l, FD_DCACHE_ALIGN,      app_sz                    );
+  return FD_LAYOUT_FINI( l, FD_DCACHE_ALIGN );
 }
 
 void *

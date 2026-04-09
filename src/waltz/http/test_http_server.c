@@ -67,10 +67,14 @@ test_oring( void ) {
     .ws_message = NULL,
   };
 
-  uchar scratch[ 1633024 ] __attribute__((aligned(128UL)));
-#if FD_HAS_ZSTD
+#if FD_HAS_DEEPASAN
+  uchar scratch[ 1633024 + 1024 ] __attribute__((aligned(128UL)));
+  FD_TEST( fd_http_server_footprint( params )<=sizeof( scratch ) );
+#elif FD_HAS_ZSTD
+  uchar scratch[ 1633024 + 256 ] __attribute__((aligned(128UL)));
   FD_TEST( fd_http_server_footprint( params )==1633024 );
 #else
+  uchar scratch[ 329344 + 256 ] __attribute__((aligned(128UL)));
   FD_TEST( fd_http_server_footprint( params )==329344 );
   FD_TEST( fd_http_server_footprint( params )<=sizeof( scratch ) );
 #endif
@@ -158,10 +162,14 @@ test_content_length_overflow_close( void ) {
   };
 
   FD_LOG_NOTICE(( "footprint %lu", fd_http_server_footprint( params ) ));
-  uchar scratch[ 1306624 ] __attribute__((aligned(128UL)));
-#if FD_HAS_ZSTD
-  FD_TEST( fd_http_server_footprint( params )==sizeof( scratch ) );
+#if FD_HAS_DEEPASAN
+  uchar scratch[ 1306624 + 1024 ] __attribute__((aligned(128UL)));
+  FD_TEST( fd_http_server_footprint( params )<=sizeof( scratch ) );
+#elif FD_HAS_ZSTD
+  uchar scratch[ 1306624 + 256 ] __attribute__((aligned(128UL)));
+  FD_TEST( fd_http_server_footprint( params )==1306624 );
 #else
+  uchar scratch[ 3072 + 256 ] __attribute__((aligned(128UL)));
   FD_TEST( fd_http_server_footprint( params )==3072 );
   FD_TEST( fd_http_server_footprint( params )<=sizeof( scratch ) );
 #endif

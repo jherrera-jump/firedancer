@@ -17,7 +17,11 @@
 
 FD_STATIC_ASSERT( FD_SPAD_LG_ALIGN      ==7,                       unit_test );
 FD_STATIC_ASSERT( FD_SPAD_ALIGN         ==(1UL<<FD_SPAD_LG_ALIGN), unit_test );
+#if FD_HAS_DEEPASAN
+FD_STATIC_ASSERT( FD_SPAD_FOOTPRINT(0UL)==1408UL,                  unit_test );
+#else
 FD_STATIC_ASSERT( FD_SPAD_FOOTPRINT(0UL)==1152UL,                  unit_test );
+#endif
 
 FD_STATIC_ASSERT( FD_SPAD_FRAME_MAX          ==128UL, unit_test );
 FD_STATIC_ASSERT( FD_SPAD_ALLOC_ALIGN_DEFAULT== 16UL, unit_test );
@@ -164,7 +168,11 @@ main( int     argc,
 
     if( FD_UNLIKELY( mem_max>(1UL<<63) ) ) FD_TEST( !footprint );
     else {
+      /* With DEEPASAN, FD_LAYOUT_APPEND adds 8-byte redzones so the
+         simple sizeof(fd_spad_t)+mem_max formula no longer holds. */
+#     if !FD_HAS_DEEPASAN
       FD_TEST( footprint==fd_ulong_align_up( sizeof(fd_spad_t) + mem_max, FD_SPAD_ALIGN ) );
+#     endif
       FD_TEST( footprint==FD_SPAD_FOOTPRINT( mem_max ) );
     }
 
@@ -174,8 +182,11 @@ main( int     argc,
     ulong footprint_dn = fd_ulong_align_dn( footprint, FD_SPAD_ALIGN );
     if( FD_UNLIKELY( (footprint_dn<sizeof(fd_spad_t)) | ((footprint_dn-sizeof(fd_spad_t))>(1UL<<63)) ) )
       FD_TEST( !mem_max );
-    else
+    else {
+#     if !FD_HAS_DEEPASAN
       FD_TEST( fd_spad_footprint( mem_max )==footprint_dn );
+#     endif
+    }
   }
 
   /* Test constructors */

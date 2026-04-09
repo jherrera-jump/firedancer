@@ -111,6 +111,7 @@ test_shred_dest_conformance( void ) {
 
   /* Create fd_stake_ci with the leader node as identity */
   fd_pubkey_t const * identity_key = &pubkeys[0];
+  fd_asan_unpoison( _stake_ci, sizeof(_stake_ci) );
   fd_stake_ci_t * stake_ci = fd_stake_ci_join( fd_stake_ci_new( _stake_ci, identity_key ) );
   FD_TEST( stake_ci );
 
@@ -239,6 +240,7 @@ test_shred_dest_conformance( void ) {
   /* Test 3: Turbine tree children */
   FD_LOG_NOTICE(( "\n=== Testing Turbine Tree Children ===" ));
 
+  fd_asan_unpoison( _stake_ci_broadcast, sizeof(_stake_ci_broadcast) );
   fd_stake_ci_t * stake_ci_broadcast = fd_stake_ci_join( fd_stake_ci_new( _stake_ci_broadcast, &broadcast_peer->pubkey ) );
   FD_TEST( stake_ci_broadcast );
 
@@ -317,6 +319,7 @@ test_shred_dest_conformance( void ) {
 
     if( expected_num_children == 0UL ) continue;
 
+    fd_asan_unpoison( _stake_ci_broadcast, sizeof(_stake_ci_broadcast) );
     fd_stake_ci_t * parent_stake_ci = fd_stake_ci_join( fd_stake_ci_new( _stake_ci_broadcast, &parent->pubkey ) );
     FD_TEST( parent_stake_ci );
 

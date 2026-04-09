@@ -36,22 +36,28 @@ fd_svm_elfgen( uchar *       buf,
   FD_TEST( total_sz <= buf_sz );
   memset( buf, 0, total_sz );
 
-  FD_STORE( fd_elf64_ehdr, buf, ((fd_elf64_ehdr) {
-    .e_ident = { 0x7f,'E','L','F', FD_ELF_CLASS_64, FD_ELF_DATA_LE, 1, FD_ELF_OSABI_NONE },
-    .e_type  = FD_ELF_ET_DYN,
-    .e_machine   = FD_ELF_EM_BPF,
-    .e_version   = 1,
-    .e_entry     = text_file_off,
-    .e_phoff     = phdr_file_off,
-    .e_shoff     = shdr_file_off,
-    .e_flags     = 0,
-    .e_ehsize    = sizeof(fd_elf64_ehdr),
-    .e_phentsize = sizeof(fd_elf64_phdr),
-    .e_phnum     = 1,
-    .e_shentsize = sizeof(fd_elf64_shdr),
-    .e_shnum     = 4,
-    .e_shstrndx  = 3
-  }) );
+  /* Populate the ELF header field-by-field instead of using FD_STORE
+     with a 64-byte compound literal.  GCC may emit vmovdqa64 for a
+     64-byte memcpy, which requires 64-byte alignment.  ASan's fake
+     stack only guarantees 32-byte alignment, causing SIGSEGV. */
+  fd_elf64_ehdr * ehdr = (fd_elf64_ehdr *)buf;
+  static uchar const elf_ident[ FD_ELF_EI_NIDENT ] = {
+    0x7f,'E','L','F', FD_ELF_CLASS_64, FD_ELF_DATA_LE, 1, FD_ELF_OSABI_NONE
+  };
+  memcpy( ehdr->e_ident, elf_ident, FD_ELF_EI_NIDENT );
+  ehdr->e_type      = FD_ELF_ET_DYN;
+  ehdr->e_machine   = FD_ELF_EM_BPF;
+  ehdr->e_version   = 1;
+  ehdr->e_entry     = text_file_off;
+  ehdr->e_phoff     = phdr_file_off;
+  ehdr->e_shoff     = shdr_file_off;
+  ehdr->e_flags     = 0;
+  ehdr->e_ehsize    = sizeof(fd_elf64_ehdr);
+  ehdr->e_phentsize = sizeof(fd_elf64_phdr);
+  ehdr->e_phnum     = 1;
+  ehdr->e_shentsize = sizeof(fd_elf64_shdr);
+  ehdr->e_shnum     = 4;
+  ehdr->e_shstrndx  = 3;
 
   /* Single PT_LOAD segment covering .text and .rodata */
   fd_elf64_phdr * phdr = (fd_elf64_phdr *)(buf + phdr_file_off);

@@ -78,6 +78,7 @@ init_all( ulong pack_depth,
   else                         FD_LOG_NOTICE(( "Test required %lu bytes of %lu available bytes",    footprint, PACK_SCRATCH_SZ ));
 #endif
 
+  fd_asan_unpoison( pack_scratch, PACK_SCRATCH_SZ );
   fd_pack_t * pack = fd_pack_join( fd_pack_new( pack_scratch, pack_depth, 1UL, bank_tile_cnt, limits, rng ) );
 #define MAX_BANKING_THREADS 64
 

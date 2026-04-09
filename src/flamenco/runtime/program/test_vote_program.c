@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "../fd_acc_pool.h"
 #include "../fd_runtime.h"
 #include "../fd_runtime_stack.h"
@@ -21,6 +22,29 @@
 #include "vote/fd_authorized_voters.h"
 
 #include <stdlib.h> // ARM64: malloc(3), free(3)
+
+#include <sys/mman.h>
+#include <errno.h>
+
+static fd_wksp_t *
+fd_wksp_new_lazy( ulong footprint ) {
+  footprint = fd_ulong_align_up( footprint, FD_SHMEM_NORMAL_PAGE_SZ );
+  void * mem = mmap( NULL, footprint, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 );
+  if( FD_UNLIKELY( mem==MAP_FAILED ) ) {
+    FD_LOG_ERR(( "mmap(NULL,%lu KiB,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS) failed (%i-%s)",
+                 footprint>>10, errno, fd_io_strerror( errno ) ));
+  }
+
+  ulong part_max = fd_wksp_part_max_est( footprint, 64UL<<10 );
+  FD_TEST( part_max );
+  ulong data_max = fd_wksp_data_max_est( footprint, part_max );
+  FD_TEST( data_max );
+  fd_wksp_t * wksp = fd_wksp_join( fd_wksp_new( mem, "wksp", 1U, part_max, data_max ) );
+  FD_TEST( wksp );
+
+  FD_TEST( 0==fd_shmem_join_anonymous( "wksp", FD_SHMEM_JOIN_MODE_READ_WRITE, wksp, mem, FD_SHMEM_NORMAL_PAGE_SZ, footprint>>FD_SHMEM_NORMAL_LG_PAGE_SZ ) );
+  return wksp;
+}
 
 #define TEST_SLOTS_PER_EPOCH       (3UL)
 #define TEST_ACC_POOL_ACCOUNT_CNT  (32UL)
@@ -612,18 +636,14 @@ main( int     argc,
   fd_boot( &argc, &argv );
 
   char const * name     = fd_env_strip_cmdline_cstr ( &argc, &argv, "--wksp",      NULL, NULL            );
-  char const * _page_sz = fd_env_strip_cmdline_cstr ( &argc, &argv, "--page-sz",   NULL, "gigantic"      );
-  ulong        page_cnt = fd_env_strip_cmdline_ulong( &argc, &argv, "--page-cnt",  NULL, 5UL             );
-  ulong        near_cpu = fd_env_strip_cmdline_ulong( &argc, &argv, "--near-cpu",  NULL, fd_log_cpu_id() );
 
   fd_wksp_t * wksp;
   if( name ) {
     FD_LOG_NOTICE(( "Attaching to --wksp %s", name ));
     wksp = fd_wksp_attach( name );
   } else {
-    FD_LOG_NOTICE(( "--wksp not specified, using an anonymous local workspace, --page-sz %s, --page-cnt %lu, --near-cpu %lu",
-                    _page_sz, page_cnt, near_cpu ));
-    wksp = fd_wksp_new_anonymous( fd_cstr_to_shmem_page_sz( _page_sz ), page_cnt, near_cpu, "wksp", 0UL );
+    FD_LOG_NOTICE(( "--wksp not specified, using lazy paged memory" ));
+    wksp = fd_wksp_new_lazy( 4UL<<30 );
   }
 
   test_account_initialize( wksp );

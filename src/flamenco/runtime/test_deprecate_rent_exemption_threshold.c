@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /* Test for SIMD-0194: deprecate_rent_exemption_threshold
 
    This test simulates passing through several epoch boundaries,
@@ -21,6 +22,29 @@
 #include "../accdb/fd_accdb_sync.h"
 #include "../features/fd_features.h"
 #include "../stakes/fd_stake_types.h"
+
+#include <errno.h>
+#include <sys/mman.h>
+
+static fd_wksp_t *
+fd_wksp_new_lazy( ulong footprint ) {
+  footprint = fd_ulong_align_up( footprint, FD_SHMEM_NORMAL_PAGE_SZ );
+  void * mem = mmap( NULL, footprint, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0 );
+  if( FD_UNLIKELY( mem==MAP_FAILED ) ) {
+    FD_LOG_ERR(( "mmap(NULL,%lu KiB,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS) failed (%i-%s)",
+                 footprint>>10, errno, fd_io_strerror( errno ) ));
+  }
+
+  ulong part_max = fd_wksp_part_max_est( footprint, 64UL<<10 );
+  FD_TEST( part_max );
+  ulong data_max = fd_wksp_data_max_est( footprint, part_max );
+  FD_TEST( data_max );
+  fd_wksp_t * wksp = fd_wksp_join( fd_wksp_new( mem, "wksp", 1U, part_max, data_max ) );
+  FD_TEST( wksp );
+
+  FD_TEST( 0==fd_shmem_join_anonymous( "wksp", FD_SHMEM_JOIN_MODE_READ_WRITE, wksp, mem, FD_SHMEM_NORMAL_PAGE_SZ, footprint>>FD_SHMEM_NORMAL_LG_PAGE_SZ ) );
+  return wksp;
+}
 
 /* Values before deprecate_rent_exemption_threshold is activated */
 #define TEST_DEFAULT_LAMPORTS_PER_UINT8_YEAR (3480UL)
@@ -422,18 +446,8 @@ main( int     argc,
       char ** argv ) {
   fd_boot( &argc, &argv );
 
-  ulong cpu_idx = fd_tile_cpu_id( fd_tile_idx() );
-  if( cpu_idx > fd_shmem_cpu_cnt() ) cpu_idx = 0UL;
-
-  char const * _page_sz = fd_env_strip_cmdline_cstr( &argc, &argv,  "--page-sz",  NULL, "gigantic" );
-  ulong        page_cnt = fd_env_strip_cmdline_ulong( &argc, &argv, "--page-cnt", NULL, 2UL );
-  ulong        numa_idx = fd_env_strip_cmdline_ulong( &argc, &argv, "--numa-idx", NULL, fd_shmem_numa_idx( cpu_idx ) );
-
-  ulong page_sz = fd_cstr_to_shmem_page_sz( _page_sz );
-  if( FD_UNLIKELY( !page_sz ) ) FD_LOG_ERR(( "unsupported --page-sz" ));
-
-  FD_LOG_NOTICE(( "Creating workspace (--page-cnt %lu, --page-sz %s, --numa-idx %lu)", page_cnt, _page_sz, numa_idx ));
-  fd_wksp_t * wksp = fd_wksp_new_anonymous( page_sz, page_cnt, fd_shmem_cpu_idx( numa_idx ), "wksp", 0UL );
+  FD_LOG_NOTICE(( "Using lazy paged memory" ));
+  fd_wksp_t * wksp = fd_wksp_new_lazy( 4UL<<30 );
   FD_TEST( wksp );
 
   test_deprecate_rent_exemption_threshold( wksp );

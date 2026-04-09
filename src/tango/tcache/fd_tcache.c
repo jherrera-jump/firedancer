@@ -12,12 +12,13 @@ fd_tcache_footprint( ulong depth,
 
   if( FD_UNLIKELY( (!depth) | (map_cnt<(depth+2UL)) | (!fd_ulong_is_pow2( map_cnt )) ) ) return 0UL; /* Invalid depth / max_cnt */
 
-  ulong cnt = 4UL+depth; if( FD_UNLIKELY( cnt<depth   ) ) return 0UL; /* overflow */
-  cnt += map_cnt;        if( FD_UNLIKELY( cnt<map_cnt ) ) return 0UL; /* overflow */
-  if( FD_UNLIKELY( cnt>(ULONG_MAX/sizeof(ulong)) ) ) return 0UL; /* overflow */
-  cnt *= sizeof(ulong); /* no overflow */
-  ulong footprint = fd_ulong_align_up( cnt, FD_TCACHE_ALIGN ); if( FD_UNLIKELY( footprint<cnt ) ) return 0UL; /* overflow */
-  return footprint;
+  ulong cnt = 4UL+depth; if( FD_UNLIKELY( cnt<depth   ) ) return 0UL;
+  cnt += map_cnt;         if( FD_UNLIKELY( cnt<map_cnt ) ) return 0UL;
+  if( FD_UNLIKELY( cnt>(ULONG_MAX/sizeof(ulong)) ) ) return 0UL;
+
+  ulong l = FD_LAYOUT_INIT;
+  l = FD_LAYOUT_APPEND( l, FD_TCACHE_ALIGN, cnt*sizeof(ulong) );
+  return FD_LAYOUT_FINI( l, FD_TCACHE_ALIGN );
 }
 
 void *

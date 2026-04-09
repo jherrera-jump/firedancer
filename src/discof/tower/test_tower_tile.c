@@ -24,6 +24,7 @@ mock_vote_txn( ulong               root,
                uchar               txn_out[ static FD_TXN_MAX_SZ ] ) {
 
   static uchar tower_mem[ 65536 ] __attribute__((aligned(128)));
+  fd_asan_unpoison( tower_mem, sizeof(tower_mem) );
   fd_tower_t * tower = fd_tower_join( fd_tower_new( tower_mem, 2, 2, 0 ) );
 
   for( ulong i = 0; i < cnt; i++ ) {

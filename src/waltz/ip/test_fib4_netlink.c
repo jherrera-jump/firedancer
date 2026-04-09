@@ -18,6 +18,7 @@ dump_table( fd_netlink_t * netlink,
   ulong const route_peer_seed     = 123456UL;
   FD_TEST( fd_fib4_footprint( route_max, route_peer_max )<=sizeof(fib1_mem) );
   fd_fib4_t fib[1];
+  fd_asan_unpoison( fib1_mem, sizeof(fib1_mem) );
   FD_TEST( fd_fib4_join( fib, fd_fib4_new( fib1_mem, route_max, route_peer_max, route_peer_seed ) ) );
 
   int load_err = fd_fib4_netlink_load_table( fib, netlink, table );

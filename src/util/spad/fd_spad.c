@@ -138,7 +138,9 @@ fd_spad_reset_sanitizer_impl( fd_spad_t * spad ) {
   fd_spad_reset_impl( spad );
 
   /* poison the entire spad memory region */
+#if FD_HAS_DEEPASAN
   fd_asan_poison( (void*)(fd_ulong_align_up((ulong)fd_spad_private_mem( spad ), FD_ASAN_ALIGN )), spad->mem_max );
+#endif
   fd_msan_poison( (void*)(fd_ulong_align_up((ulong)fd_spad_private_mem( spad ), FD_MSAN_ALIGN )), spad->mem_max );
 }
 
@@ -150,7 +152,9 @@ fd_spad_delete_sanitizer_impl( void * shspad ) {
     fd_spad_t * spad = (fd_spad_t *)shspad;
 
     /* unpoison the entire spad memory region upon deletion */
+#if FD_HAS_DEEPASAN
     fd_asan_unpoison( (void*)(fd_ulong_align_up( (ulong)fd_spad_private_mem( spad ), FD_ASAN_ALIGN )), spad->mem_max );
+#endif
     fd_msan_unpoison( (void*)(fd_ulong_align_up( (ulong)fd_spad_private_mem( spad ), FD_MSAN_ALIGN )), spad->mem_max );
   }
 
@@ -185,7 +189,9 @@ fd_spad_push_sanitizer_impl( fd_spad_t * spad ) {
   fd_spad_push_impl( spad );
 
   /* poison the remaining free memory to cancel any in-progress prepare */
+#if FD_HAS_DEEPASAN
   fd_asan_poison( (void*)(fd_ulong_align_up( (ulong)(fd_spad_private_mem( spad ) + spad->mem_used), FD_ASAN_ALIGN )), spad->mem_max - spad->mem_used );
+#endif
 }
 
 void
@@ -193,7 +199,9 @@ fd_spad_pop_sanitizer_impl( fd_spad_t * spad ) {
   fd_spad_pop_impl( spad );
 
   /* poison the entire memory region from mem_used to mem_max */
+#if FD_HAS_DEEPASAN
   fd_asan_poison( (void*)(fd_ulong_align_up( (ulong)(fd_spad_private_mem( spad ) + spad->mem_used), FD_ASAN_ALIGN )), spad->mem_max - spad->mem_used );
+#endif
   fd_msan_poison( (void*)(fd_ulong_align_up( (ulong)(fd_spad_private_mem( spad ) + spad->mem_used), FD_MSAN_ALIGN )), spad->mem_max - spad->mem_used );
 }
 

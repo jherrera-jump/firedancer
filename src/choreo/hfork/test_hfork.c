@@ -24,6 +24,7 @@ register_voters( fd_hfork_t * hfork, fd_pubkey_t * voters, ulong cnt ) {
 
 void
 test_hfork_vote_counting( void ) {
+  fd_asan_unpoison( scratch, SCRATCH_MAX );
   ulong  per_vtr_max = 8;
   ulong  vtr_max = 4;
 
@@ -79,6 +80,7 @@ test_hfork_vote_counting( void ) {
 
 void
 test_hfork_multiple_bank_hashes( void ) {
+  fd_asan_unpoison( scratch, SCRATCH_MAX );
   ulong  per_vtr_max = 8;
   ulong  vtr_max = 4;
 
@@ -118,6 +120,7 @@ test_hfork_multiple_bank_hashes( void ) {
 
 void
 test_hfork_eviction( void ) {
+  fd_asan_unpoison( scratch, SCRATCH_MAX );
   ulong  per_vtr_max = 3;
   ulong  vtr_max = 2;
 

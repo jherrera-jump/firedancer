@@ -322,20 +322,24 @@ test_stream_encode( void ) {
   }
 
   FD_TEST( fd_quic_encode_stream_frame( buf, buf+sizeof(buf), 0x4000, 0, 0x40, 0 )==7 );
-  uchar const s_a[7] =
+  uchar const s_a[16] =
     { 0x0a,
       0x80, 0x00, 0x40, 0x00,
-      0x40, 0x40 };
+      0x40, 0x40, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00 };
   FD_TEST( fd_memeq( buf, s_a, 7 ) );
   fd_quic_stream_a_frame_t f_a[1];
   FD_TEST( fd_quic_decode_stream_a_frame( f_a, s_a, 7 ) );
   FD_TEST( f_a->type==0xa && f_a->stream_id==0x4000 && f_a->length==0x40 );
 
   FD_TEST( fd_quic_encode_stream_frame( buf, buf+sizeof(buf), 0x4000, 0, 0x40, 1 )==7 );
-  uchar const s_b[7] =
+  uchar const s_b[16] =
     { 0x0b,
       0x80, 0x00, 0x40, 0x00,
-      0x40, 0x40 };
+      0x40, 0x40, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00 };
   FD_TEST( fd_memeq( buf, s_b, 7 ) );
   fd_quic_stream_a_frame_t f_b[1];
   FD_TEST( fd_quic_decode_stream_a_frame( f_b, s_b, 7 ) );

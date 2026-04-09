@@ -168,6 +168,7 @@ test_mainnet( char const * filename       FD_PARAM_UNUSED,
   ulong txn_cnt = 0UL;
 
   FD_TEST( fd_rdisp_footprint( MAX_TXN_PER_BLOCK, 1UL )<TEST_FOOTPRINT );
+  fd_asan_unpoison( footprint, TEST_FOOTPRINT );
   fd_rdisp_t * disp = fd_rdisp_join( fd_rdisp_new( footprint, MAX_TXN_PER_BLOCK, 1UL, SEED ) );
   FD_TEST( disp );
 
@@ -273,6 +274,7 @@ random_test( fd_rng_t * rng,
   ulong depth       = 300UL;
   ulong block_depth = 10UL;
   FD_TEST( fd_rdisp_footprint( depth, block_depth )<=TEST_FOOTPRINT && fd_rdisp_align()<=128UL ); /* if this fails, update the test */
+  fd_asan_unpoison( footprint, TEST_FOOTPRINT );
   fd_rdisp_t * disp = fd_rdisp_join( fd_rdisp_new( footprint, depth, block_depth, SEED ) );   FD_TEST( disp );
 
   const int log_details = 0;
@@ -445,6 +447,7 @@ main( int     argc,
 
   fd_rdisp_staging_lane_info_t lane_info[ 4 ];
 
+  fd_asan_unpoison( footprint, TEST_FOOTPRINT );
   fd_rdisp_t * disp = fd_rdisp_join( fd_rdisp_new( footprint, depth, block_depth, SEED ) );   FD_TEST( disp );
 
   /* operations on an unknown block fail */
@@ -675,6 +678,7 @@ main( int     argc,
 
   FD_TEST( fd_rdisp_footprint( FD_RDISP_MAX_BLOCK_DEPTH, FD_RDISP_MAX_BLOCK_DEPTH )<=TEST_FOOTPRINT && fd_rdisp_align()<=128UL ); /* if this fails, update the test */
 
+  fd_asan_unpoison( footprint, TEST_FOOTPRINT );
   disp = fd_rdisp_join( fd_rdisp_new( footprint, FD_RDISP_MAX_BLOCK_DEPTH, FD_RDISP_MAX_BLOCK_DEPTH, SEED ) );
   FD_TEST( disp );
   /* Fill block_depth, (remove one, add one) a bunch, then drain*/

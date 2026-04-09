@@ -28,7 +28,7 @@ fd_funk_shmem_footprint( ulong txn_max,
 
   l = FD_LAYOUT_APPEND( l, fd_alloc_align(), fd_alloc_footprint() );
 
-  return l;
+  return FD_LAYOUT_FINI( l, fd_funk_align() );
 }
 
 ulong
@@ -97,7 +97,14 @@ fd_funk_shmem_new( void * shmem,
 
   void * alloc = FD_SCRATCH_ALLOC_APPEND( l, fd_alloc_align(), fd_alloc_footprint() );
 
+  FD_SCRATCH_ALLOC_FINI( l, fd_funk_align() );
+#if FD_HAS_DEEPASAN
+  /* With DEEPASAN, fd_funk_shmem_footprint includes a redzone for the
+     fd_funk_shmem_t element. */
+  FD_TEST( _l <= (ulong)funk + fd_funk_shmem_footprint( txn_max, rec_max ) );
+#else
   FD_TEST( _l == (ulong)funk + fd_funk_shmem_footprint( txn_max, rec_max ) );
+#endif
 
   fd_memset( funk, 0, sizeof(fd_funk_shmem_t) );
 

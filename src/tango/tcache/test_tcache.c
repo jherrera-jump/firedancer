@@ -3,7 +3,12 @@
 #if FD_HAS_HOSTED
 
 FD_STATIC_ASSERT( FD_TCACHE_ALIGN==128UL,              unit_test );
+
+#if FD_HAS_DEEPASAN
 FD_STATIC_ASSERT( FD_TCACHE_FOOTPRINT(1UL,4UL)==128UL, unit_test );
+#else
+FD_STATIC_ASSERT( FD_TCACHE_FOOTPRINT(1UL,4UL)==128UL, unit_test );
+#endif
 
 FD_STATIC_ASSERT( FD_TCACHE_TAG_NULL==0UL, unit_test );
 
@@ -156,7 +161,7 @@ main( int     argc,
 
   oldest = fd_tcache_reset( ring, depth, map, map_cnt );      FD_TEST( !oldest );
   uint dup_thresh = (uint)(0.5f + dup_frac*(float)(1UL<<32));
-  
+
   for( ulong rem=3UL*depth; rem; rem-- ) {
 
     ulong tag;
