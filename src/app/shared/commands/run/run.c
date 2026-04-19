@@ -13,6 +13,7 @@
 #include "../../../platform/fd_file_util.h"
 #include "../../../platform/fd_net_util.h"
 #include "../../../../disco/net/fd_net_tile.h"
+#include "../../../../disco/topo/fd_topob.h"
 
 #include "../configure/configure.h"
 
@@ -277,7 +278,7 @@ main_pid_namespace( void * _args ) {
 
   for( ulong i=0UL; i<config->topo.tile_cnt; i++ ) {
     fd_topo_tile_t const * tile = &config->topo.tiles[ i ];
-    if( FD_UNLIKELY( tile->is_agave ) ) continue;
+    if( FD_UNLIKELY( tile->flags & FD_TOPOB_TILE_IS_AGAVE ) ) continue;
 
     if( need_xdp ) {
       if( FD_UNLIKELY( strcmp( tile->name, "net" ) ) ) {
@@ -425,7 +426,7 @@ main_pid_namespace( void * _args ) {
         fd_sys_util_exit_group( WTERMSIG( wstatus ) ? WTERMSIG( wstatus ) : 1 );
       } else {
         int exit_code = WEXITSTATUS( wstatus );
-        if( FD_LIKELY( !exit_code && tile_idx!=ULONG_MAX && config->topo.tiles[ tile_idx ].allow_shutdown ) ) {
+        if( FD_LIKELY( !exit_code && tile_idx!=ULONG_MAX && (config->topo.tiles[ tile_idx ].flags & FD_TOPOB_TILE_ALLOW_SHUTDOWN) ) ) {
           found = 1;
           FD_LOG_INFO(( "tile %s:%lu exited gracefully with code %d", tile_name, tile_id, exit_code ));
         } else {

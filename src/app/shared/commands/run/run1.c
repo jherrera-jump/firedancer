@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "run.h"
 
+#include "../../../../disco/topo/fd_topob.h"
 #include "../../../../util/tile/fd_tile_private.h"
 
 #include <sched.h>
@@ -51,7 +52,7 @@ tile_main( void * _args ) {
 
   /* If we get here, the tile run loop has requested to exit the tile,
      so it is cleanly shutting down. */
-  FD_TEST( args->tile->allow_shutdown );
+  FD_TEST( args->tile->flags & FD_TOPOB_TILE_ALLOW_SHUTDOWN );
   return 0;
 }
 

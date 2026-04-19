@@ -37,6 +37,7 @@ udpecho_topo( config_t * config ) {
                    parsed_tile_to_cpu[ i ], cpus->cpu_cnt ));
     tile_to_cpu[ i ] = fd_ulong_if( parsed_tile_to_cpu[ i ]==USHORT_MAX, ULONG_MAX, (ulong)parsed_tile_to_cpu[ i ] );
   }
+
   if( FD_LIKELY( !is_auto_affinity ) ) {
     if( FD_UNLIKELY( affinity_tile_cnt!=4UL ) )
       FD_LOG_ERR(( "Invalid [development.udpecho.affinity]: must include exactly three CPUs" ));
@@ -49,11 +50,11 @@ udpecho_topo( config_t * config ) {
 
   fd_topob_wksp( topo, "metric" );
   fd_topob_wksp( topo, "metric_in" );
-  fd_topos_net_tiles( topo, config->layout.net_tile_count, &config->net, config->tiles.netlink.max_routes, config->tiles.netlink.max_peer_routes, config->tiles.netlink.max_neighbors, 0, tile_to_cpu );
-  fd_topob_tile( topo, "metric",  "metric", "metric_in", tile_to_cpu[ topo->tile_cnt ], 0, 0, 0 );
+  fd_topos_net_tiles( topo, config->layout.net_tile_count, &config->net, config->tiles.netlink.max_routes, config->tiles.netlink.max_peer_routes, config->tiles.netlink.max_neighbors, 0 );
+  fd_topob_tile( topo, "metric",  "metric", "metric_in", FD_TOPOB_TILE_FLOATING );
 
   fd_topob_wksp( topo, "l4swap" );
-  fd_topob_tile( topo, "l4swap", "l4swap", "l4swap", tile_to_cpu[ topo->tile_cnt ], 0, 0, 0 );
+  fd_topob_tile( topo, "l4swap", "l4swap", "l4swap", 0UL );
 
   fd_topob_link( topo, "quic_net", "l4swap", 2048UL, FD_NET_MTU, 1UL );
   fd_topob_tile_out( topo, "l4swap", 0UL, "quic_net", 0UL );
@@ -63,6 +64,14 @@ udpecho_topo( config_t * config ) {
   fd_topob_tile_in( topo, "l4swap", 0UL, "metric_in", "net_quic", 0UL, FD_TOPOB_UNRELIABLE, FD_TOPOB_POLLED );
 
   fd_topos_net_tile_finish( topo, 0UL );
+
+  /* Apply explicit CPU affinity when not using auto layout. */
+  if( FD_UNLIKELY( !is_auto_affinity ) ) {
+    for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
+      topo->tiles[ i ].cpu_idx = tile_to_cpu[ i ];
+    }
+  }
+
   if( FD_UNLIKELY( is_auto_affinity ) ) fd_topob_auto_layout( topo, 0 );
   topo->agave_affinity_cnt = 0;
   fd_topob_finish( topo, CALLBACKS );

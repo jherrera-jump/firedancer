@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "fd_topo.h"
+#include "fd_topob.h"
 
 #include "../metrics/fd_metrics.h"
 #include "../../util/tile/fd_tile_private.h"
@@ -132,7 +133,7 @@ fd_topo_run_tile( fd_topo_t *          topo,
     tile_run->unprivileged_init( topo, tile );
 
   tile_run->run( topo, tile );
-  if( FD_UNLIKELY( !tile->allow_shutdown ) ) FD_LOG_ERR(( "tile %s:%lu run loop returned", tile->name, tile->kind_id ));
+  if( FD_UNLIKELY( !(tile->flags & FD_TOPOB_TILE_ALLOW_SHUTDOWN) ) ) FD_LOG_ERR(( "tile %s:%lu run loop returned", tile->name, tile->kind_id ));
 
   FD_MGAUGE_SET( TILE, STATUS, 2UL );
 }
@@ -161,7 +162,7 @@ run_tile_thread_main( void * _args ) {
   }
 
   fd_topo_run_tile( args.topo, args.tile, 0, 1, 1, args.uid, args.gid, -1, &args.tile_run );
-  FD_TEST( args.tile->allow_shutdown );
+  FD_TEST( args.tile->flags & FD_TOPOB_TILE_ALLOW_SHUTDOWN );
   return NULL;
 }
 
@@ -321,8 +322,8 @@ fd_topo_run_single_process( fd_topo_t *       topo,
 
   for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
     fd_topo_tile_t * tile = &topo->tiles[ i ];
-    if( !agave && tile->is_agave ) continue;
-    if( agave==1 && !tile->is_agave ) continue;
+    if( !agave && (tile->flags & FD_TOPOB_TILE_IS_AGAVE) ) continue;
+    if( agave==1 && !(tile->flags & FD_TOPOB_TILE_IS_AGAVE) ) continue;
 
     fd_topo_run_tile_t run_tile = tile_run( tile );
     run_tile_thread( topo, tile, run_tile, uid, gid, floating_cpu_set, save_priority, &args[ i ] );
@@ -330,8 +331,8 @@ fd_topo_run_single_process( fd_topo_t *       topo,
 
   for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
     fd_topo_tile_t * tile = &topo->tiles[ i ];
-    if( !agave && tile->is_agave ) continue;
-    if( agave==1 && !tile->is_agave ) continue;
+    if( !agave && (tile->flags & FD_TOPOB_TILE_IS_AGAVE) ) continue;
+    if( agave==1 && !(tile->flags & FD_TOPOB_TILE_IS_AGAVE) ) continue;
 
     while( !FD_VOLATILE( args[ i ].copied ) ) FD_SPIN_PAUSE();
   }

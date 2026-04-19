@@ -18,7 +18,7 @@
 
 /* ---- Tile specification ------------------------------------------------ */
 
-typedef struct { char const * name; ulong cnt; } tile_spec_t;
+typedef struct { char const * name; ulong cnt; ulong flags; } tile_spec_t;
 
 /* ---- Helpers ----------------------------------------------------------- */
 
@@ -61,6 +61,7 @@ make_tiles( fd_topo_t *         topo,
       strncpy( tile->name, s->name, sizeof(tile->name) );
       tile->id      = topo->tile_cnt;
       tile->cpu_idx = ULONG_MAX;
+      tile->flags   = s->flags;
 
       /* Compute kind_id = count of prior tiles with same name */
       ulong kind_id = 0UL;
@@ -180,17 +181,22 @@ run_test( char const *          test_name,
 
 /* --- Firedancer default (no snapshots, no rpc, no telemetry, no vinyl) -- */
 
+#define FL  FD_TOPOB_TILE_FLOATING
+#define SU  FD_TOPOB_TILE_STARTUP
+#define PS  FD_TOPOB_TILE_POST_START
+#define CR  FD_TOPOB_TILE_CRITICAL
+
 static tile_spec_t const FIREDANCER_TILES[] = {
   /* floating tiles */
-  { "netlnk", 1 },
-  { "metric", 1 }, { "diag",   1 }, { "genesi", 1 }, { "ipecho", 1 },
+  { "netlnk", 1, FL },
+  { "metric", 1, FL }, { "diag",   1, FL }, { "genesi", 1, FL }, { "ipecho", 1, FL },
   /* ordered tiles (36) */
-  { "net",    2 }, { "quic",   1 }, { "verify", 6 }, { "dedup",  1 },
-  { "resolv", 1 }, { "pack",   1 }, { "execle", 2 }, { "poh",    1 },
-  { "shred",  1 }, { "sign",   2 }, { "gui",    1 }, { "gossvf", 2 },
-  { "gossip", 1 }, { "repair", 1 }, { "replay", 1 }, { "execrp",10 },
-  { "txsend", 1 }, { "tower",  1 },
-  { NULL, 0 }
+  { "net",    2, 0  }, { "quic",   1, 0  }, { "verify", 6, 0  }, { "dedup",  1, 0  },
+  { "resolv", 1, PS }, { "pack",   1, CR }, { "execle", 2, PS }, { "poh",    1, PS|CR },
+  { "sign",   2, 0  }, { "shred",  1, 0  }, { "gui",    1, CR }, { "gossvf", 2, 0  },
+  { "gossip", 1, 0  }, { "repair", 1, 0  }, { "replay", 1, 0  }, { "execrp",10, PS },
+  { "txsend", 1, PS }, { "tower",  1, 0  },
+  { NULL, 0, 0 }
 };
 
 /* --- Frankendancer default (from default.toml) ---------------------------
@@ -200,14 +206,14 @@ static tile_spec_t const FIREDANCER_TILES[] = {
 
 static tile_spec_t const FRANKENDANCER_TILES[] = {
   /* floating tiles */
-  { "netlnk", 1 },
-  { "metric", 1 }, { "diag",   1 },
+  { "netlnk", 1, FL },
+  { "metric", 1, FL }, { "diag",   1, FL },
   /* ordered tiles (21) */
-  { "net",    1 }, { "quic",   1 }, { "verify", 6 }, { "dedup",  1 },
-  { "resolh", 1 }, { "pack",   1 }, { "bank",   4 }, { "pohh",   1 },
-  { "shred",  1 }, { "store",  1 }, { "sign",   1 }, { "plugin", 1 },
-  { "gui",    1 },
-  { NULL, 0 }
+  { "net",    1, 0  }, { "quic",   1, 0  }, { "verify", 6, 0  }, { "dedup",  1, 0  },
+  { "resolh", 1, 0  }, { "pack",   1, CR }, { "bank",   4, 0  }, { "pohh",   1, CR },
+  { "sign",   1, 0  }, { "shred",  1, 0  }, { "store",  1, 0  }, { "plugin", 1, 0  },
+  { "gui",    1, CR },
+  { NULL, 0, 0 }
 };
 
 /* ======================================================================== */
@@ -356,14 +362,14 @@ static char const * const FRANK_32X2[] = {
    verify=2, execrp=4  →  26 tiles total, 31 available ≥ 26              */
 
 static tile_spec_t const FD_FEWER_TILES[] = {
-  { "netlnk", 1 },
-  { "metric", 1 }, { "diag",   1 }, { "genesi", 1 }, { "ipecho", 1 },
-  { "net",    2 }, { "quic",   1 }, { "verify", 2 }, { "dedup",  1 },
-  { "resolv", 1 }, { "pack",   1 }, { "execle", 2 }, { "poh",    1 },
-  { "shred",  1 }, { "sign",   2 }, { "gui",    1 }, { "gossvf", 2 },
-  { "gossip", 1 }, { "repair", 1 }, { "replay", 1 }, { "execrp", 4 },
-  { "txsend", 1 }, { "tower",  1 },
-  { NULL, 0 }
+  { "netlnk", 1, FL },
+  { "metric", 1, FL }, { "diag",   1, FL }, { "genesi", 1, FL }, { "ipecho", 1, FL },
+  { "net",    2, 0  }, { "quic",   1, 0  }, { "verify", 2, 0  }, { "dedup",  1, 0  },
+  { "resolv", 1, PS }, { "pack",   1, CR }, { "execle", 2, PS }, { "poh",    1, PS|CR },
+  { "sign",   2, 0  }, { "shred",  1, 0  }, { "gui",    1, CR }, { "gossvf", 2, 0  },
+  { "gossip", 1, 0  }, { "repair", 1, 0  }, { "replay", 1, 0  }, { "execrp", 4, PS },
+  { "txsend", 1, PS }, { "tower",  1, 0  },
+  { NULL, 0, 0 }
 };
 
 static char const * const FD_32X2_FEWER[] = {
@@ -385,13 +391,13 @@ static char const * const FD_32X2_FEWER[] = {
    Agave: physical 14-31, HT 46-63.                                       */
 
 static tile_spec_t const FRANK_MORE_BANK[] = {
-  { "netlnk", 1 },
-  { "metric", 1 }, { "diag",   1 },
-  { "net",    2 }, { "quic",   1 }, { "verify", 6 }, { "dedup",  1 },
-  { "resolh", 1 }, { "pack",   1 }, { "bank",   4 }, { "pohh",   1 },
-  { "shred",  2 }, { "store",  1 }, { "sign",   1 }, { "plugin", 1 },
-  { "gui",    1 },
-  { NULL, 0 }
+  { "netlnk", 1, FL },
+  { "metric", 1, FL }, { "diag",   1, FL },
+  { "net",    2, 0  }, { "quic",   1, 0  }, { "verify", 6, 0  }, { "dedup",  1, 0  },
+  { "resolh", 1, 0  }, { "pack",   1, CR }, { "bank",   4, 0  }, { "pohh",   1, CR },
+  { "sign",   1, 0  }, { "shred",  2, 0  }, { "store",  1, 0  }, { "plugin", 1, 0  },
+  { "gui",    1, CR },
+  { NULL, 0, 0 }
 };
 
 static char const * const FRANK_32X2_MORE_BANK[] = {
@@ -441,6 +447,10 @@ static char const * const FD_32X2_EXTRA_BL[] = {
 
 #undef __
 #undef _A_
+#undef FL
+#undef SU
+#undef PS
+#undef CR
 
 /* ======================================================================== */
 /*  Test functions                                                          */

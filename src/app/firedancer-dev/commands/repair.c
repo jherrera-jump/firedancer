@@ -106,7 +106,7 @@ repair_topo( config_t * config ) {
     tile_to_cpu[ i ] = fd_ulong_if( parsed_tile_to_cpu[ i ]==USHORT_MAX, ULONG_MAX, (ulong)parsed_tile_to_cpu[ i ] );
   }
 
-  fd_core_subtopo(   config, tile_to_cpu );
+  fd_core_subtopo(   config );
   fd_gossip_subtopo( config, tile_to_cpu );
 
   /*             topo, name */
@@ -173,9 +173,9 @@ repair_topo( config_t * config ) {
   FOR(net_tile_cnt) fd_topos_net_rx_link( topo, "net_quic",   i, config->net.ingress_buffer_size );
   FOR(net_tile_cnt) fd_topos_net_rx_link( topo, "net_shred",  i, config->net.ingress_buffer_size );
 
-  /*                                              topo, tile_name, tile_wksp, metrics_wksp, cpu_idx,                       is_agave, uses_id_keyswitch, uses_av_keyswitch */
-  FOR(shred_tile_cnt)              fd_topob_tile( topo, "shred",   "shred",   "metric_in",  tile_to_cpu[ topo->tile_cnt ], 0,        1,                 0 );
-  fd_topo_tile_t * repair_tile =   fd_topob_tile( topo, "repair",  "repair",  "metric_in",  tile_to_cpu[ topo->tile_cnt ], 0,        1,                 0 );
+  /*                                              topo, tile_name, tile_wksp, metrics_wksp, flags */
+  FOR(shred_tile_cnt)              fd_topob_tile( topo, "shred",   "shred",   "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH );
+  fd_topo_tile_t * repair_tile =   fd_topob_tile( topo, "repair",  "repair",  "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH );
 
   /* Setup a shared wksp object for fec sets. */
 
@@ -272,7 +272,7 @@ repair_topo( config_t * config ) {
   if( 1 ) {
     fd_topob_wksp( topo, "scap" );
 
-    fd_topo_tile_t * scap_tile = fd_topob_tile( topo, "scap", "scap", "metric_in", tile_to_cpu[ topo->tile_cnt ], 0, 0, 0 );
+    fd_topo_tile_t * scap_tile = fd_topob_tile( topo, "scap", "scap", "metric_in", 0UL );
 
     fd_topob_tile_in(  topo, "scap", 0UL, "metric_in", "repair_net", 0UL, FD_TOPOB_UNRELIABLE, FD_TOPOB_POLLED );
     for( ulong j=0UL; j<net_tile_cnt; j++ ) {
@@ -317,6 +317,13 @@ repair_topo( config_t * config ) {
   for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
     fd_topo_tile_t * tile = &topo->tiles[ i ];
     fd_topo_configure_tile( tile, config );
+  }
+
+  /* Apply explicit CPU affinity when not using auto layout. */
+  if( FD_UNLIKELY( !is_auto_affinity ) ) {
+    for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
+      topo->tiles[ i ].cpu_idx = tile_to_cpu[ i ];
+    }
   }
 
   if( FD_UNLIKELY( is_auto_affinity ) ) fd_topob_auto_layout( topo, 0 );

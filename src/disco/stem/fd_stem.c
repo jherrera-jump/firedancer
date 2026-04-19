@@ -1,4 +1,5 @@
 #include "fd_stem.h"
+#include "../topo/fd_topob.h"
 
 /* fd_stem provides services to multiplex multiple streams of input
    fragments and present them to a mix of reliable and unreliable
@@ -827,7 +828,7 @@ STEM_(run)( fd_topo_t *      topo,
   FD_COMPILER_MFENCE();
 #endif
 
-  if( FD_LIKELY( tile->allow_shutdown ) ) {
+  if( FD_LIKELY( tile->flags & FD_TOPOB_TILE_ALLOW_SHUTDOWN ) ) {
     for( ulong i=0UL; i<tile->in_cnt; i++ ) {
       if( FD_UNLIKELY( !tile->in_link_poll[ i ] || !tile->in_link_reliable[ i ] ) ) continue;
 

@@ -146,14 +146,11 @@ fd_topob_tile_uses( fd_topo_t *           topo,
 }
 
 fd_topo_tile_t *
-fd_topob_tile( fd_topo_t *    topo,
-               char const *   tile_name,
-               char const *   tile_wksp,
-               char const *   metrics_wksp,
-               ulong          cpu_idx,
-               int            is_agave,
-               int            uses_id_keyswitch,
-               int            uses_av_keyswitch ) {
+fd_topob_tile( fd_topo_t *  topo,
+               char const * tile_name,
+               char const * tile_wksp,
+               char const * metrics_wksp,
+               ulong        flags ) {
 
   if( FD_UNLIKELY( !topo || !tile_name || !tile_wksp || !metrics_wksp ) ) FD_LOG_ERR(( "NULL args" ));
   if( FD_UNLIKELY( strlen( tile_name )>=sizeof(topo->tiles[ topo->tile_cnt ].name ) ) ) FD_LOG_ERR(( "tile name too long: %s", tile_name ));
@@ -168,8 +165,8 @@ fd_topob_tile( fd_topo_t *    topo,
   strncpy( tile->name, tile_name, sizeof(tile->name) );
   tile->id                  = topo->tile_cnt;
   tile->kind_id             = kind_id;
-  tile->is_agave            = is_agave;
-  tile->cpu_idx             = cpu_idx;
+  tile->flags               = flags;
+  tile->cpu_idx             = ULONG_MAX;
   tile->in_cnt              = 0UL;
   tile->out_cnt             = 0UL;
   tile->uses_obj_cnt        = 0UL;
@@ -182,7 +179,7 @@ fd_topob_tile( fd_topo_t *    topo,
   tile->metrics_obj_id = obj->id;
   fd_topob_tile_uses( topo, tile, obj, FD_SHMEM_JOIN_MODE_READ_WRITE );
 
-  if( FD_LIKELY( uses_id_keyswitch ) ) {
+  if( FD_LIKELY( flags & FD_TOPOB_TILE_USES_ID_KEYSWITCH ) ) {
     obj = fd_topob_obj( topo, "keyswitch", tile_wksp );
     tile->id_keyswitch_obj_id = obj->id;
     fd_topob_tile_uses( topo, tile, obj, FD_SHMEM_JOIN_MODE_READ_WRITE );
@@ -190,7 +187,7 @@ fd_topob_tile( fd_topo_t *    topo,
     tile->id_keyswitch_obj_id = ULONG_MAX;
   }
 
-  if( FD_UNLIKELY( uses_av_keyswitch ) ) {
+  if( FD_UNLIKELY( flags & FD_TOPOB_TILE_USES_AV_KEYSWITCH ) ) {
     obj = fd_topob_obj( topo, "keyswitch", tile_wksp );
     tile->av_keyswitch_obj_id = obj->id;
     fd_topob_tile_uses( topo, tile, obj, FD_SHMEM_JOIN_MODE_READ_WRITE );
@@ -368,87 +365,6 @@ validate( fd_topo_t const * topo ) {
   }
 }
 
-/* Tiles that yield to the kernel scheduler */
-static char const * FLOATING[] = {
-  "netlnk",
-  "metric",
-  "diag",
-  "bencho",
-  "genesi", /* FIREDANCER ONLY */
-  "ipecho", /* FIREDANCER ONLY */
-  "snapwr", /* FIREDANCER ONLY */
-  NULL
-};
-
-/* Tiles only active on startup
-   (Must shut down after snapshot load) */
-static char const * STARTUP[] = {
-  "snapct", /* FIREDANCER only */
-  "snapld", /* FIREDANCER only */
-  "snapdc", /* FIREDANCER only */
-  "snapin", /* FIREDANCER only */
-  "snapwm", /* FIREDANCER only */
-  "snapwh", /* FIREDANCER only */
-  "snapla", /* FIREDANCER only */
-  "snapls", /* FIREDANCER only */
-  "snaplh", /* FIREDANCER only */
-  "snaplv", /* FIREDANCER only */
-  NULL
-};
-
-/* Tiles only active post startup
-   (Must sleep until snapshot load finishes) */
-static char const * POST_START[] = {
-  "resolv", /* FIREDANCER only */
-  "accdb",  /* FIREDANCER only */
-  "execle", /* FIREDANCER only */
-  "poh",    /* FIREDANCER only */
-  "execrp", /* FIREDANCER only */
-  "txsend", /* FIREDANCER only */
-  NULL
-};
-
-/* Tiles that are always active */
-static char const * ALWAYS[] = {
-  "backt",
-  "benchg",
-  "benchs",
-  "net",
-  "sock",
-  "quic",
-  "bundle",
-  "verify",
-  "dedup",
-  "resolh", /* FRANK only */
-  "pack",
-  "bank",   /* FRANK only */
-  "pohh",   /* FRANK only */
-  "sign",
-  "shred",
-  "event",  /* FIREDANCER only */
-  "store",  /* FRANK only */
-  "plugin", /* FRANK only */
-  "gui",
-  "rpc",    /* FIREDANCER only */
-  "gossvf", /* FIREDANCER only */
-  "gossip", /* FIREDANCER only */
-  "repair", /* FIREDANCER only */
-  "replay", /* FIREDANCER only */
-  "tower",  /* FIREDANCER only */
-  "pktgen",
-  "forkt",  /* FIREDANCER only */
-  NULL
-};
-
-/* Tiles that should not have a SMT neighbor */
-static char const * CRITICAL_TILES[] = {
-  "pack",
-  "poh",
-  "pohh",
-  "gui",
-  NULL
-};
-
 static void
 auto_tile_cpu( fd_topo_tile_t * tile,
                fd_topo_cpus_t * cpus,
@@ -461,24 +377,19 @@ auto_tile_cpu( fd_topo_tile_t * tile,
   ulong cpu_cnt = cpus->cpu_cnt;
   while( cpu_idx<cpu_cnt && cpu_bv_test( cpu_assigned, cpu_ordering[ cpu_idx ] ) ) cpu_idx++;
   if( FD_UNLIKELY( cpu_idx>=cpu_cnt ) ) {
-    FD_LOG_ERR(( "auto layout cannot set affinity for tile `%s:%lu` because all the CPUs are already assigned", tile->name, tile->kind_id ));
+    FD_LOG_ERR(( "auto layout cannot set affinity for tile `%s:%lu`"
+                 " because all the CPUs are already assigned",
+                 tile->name, tile->kind_id ));
   }
 
   /* Certain tiles are latency and throughput critical and
      should not get a HT pair assigned. */
   fd_topo_cpu_t const * cpu = &cpus->cpu[ cpu_ordering[ cpu_idx ] ];
 
-  int is_ht_critical = 0;
-  if( FD_UNLIKELY( cpu->sibling!=ULONG_MAX ) ) {
-    for( char const ** p = CRITICAL_TILES; *p; p++ ) {
-      if( !strcmp( tile->name, *p ) ) {
-        is_ht_critical = 1;
-        break;
-      }
-    }
-  }
+  int is_ht_critical = !!(tile->flags & FD_TOPOB_TILE_CRITICAL);
 
-  if( FD_UNLIKELY( is_ht_critical || skip_ht_pairs ) ) {
+  if( FD_UNLIKELY( ( is_ht_critical && cpu->sibling!=ULONG_MAX ) ||
+                   skip_ht_pairs ) ) {
     ulong try_assign = cpu_idx;
     while( cpu_bv_test( cpu_assigned, cpu_ordering[ try_assign ] ) ||
            ( cpus->cpu[ cpu_ordering[ try_assign ] ].sibling!=ULONG_MAX &&
@@ -506,8 +417,8 @@ fd_topob_auto_layout_cpus( fd_topo_t *      topo,
                            fd_topo_cpus_t * cpus,
                            int              reserve_agave_cores ) {
   /* Incredibly simple automatic layout system for now ... just assign
-     tiles to CPU cores in NUMA sequential order, except for a few tiles
-     which should be floating. */
+     tiles to CPU cores in NUMA sequential order, except for a few
+     tiles which should be floating. */
 
   for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
     fd_topo_tile_t * tile = &topo->tiles[ i ];
@@ -529,8 +440,8 @@ fd_topob_auto_layout_cpus( fd_topo_t *      topo,
       cpu_ordering[ next_cpu_idx++ ] = (ushort)j;
 
       if( FD_UNLIKELY( cpu->sibling!=ULONG_MAX ) ) {
-        /* If the CPU has a HT pair, place it immediately after so they
-           are sequentially assigned. */
+        /* If the CPU has a HT pair, place it immediately after so
+           they are sequentially assigned. */
         FD_TEST( next_cpu_idx<FD_TILE_MAX );
         cpu_ordering[ next_cpu_idx++ ] = (ushort)cpu->sibling;
         cpu_bv_insert( pairs_assigned, cpu->sibling );
@@ -559,87 +470,79 @@ fd_topob_auto_layout_cpus( fd_topo_t *      topo,
     }
   }
 
-  /* Compute total number of tiles that need assignment */
-  ulong always_tiles_to_assign = 0UL;
+  /* Compute total number of tiles that need assignment by
+     checking tile flags instead of matching name arrays. */
+  ulong always_tiles_to_assign     = 0UL;
   ulong post_start_tiles_to_assign = 0UL;
-  ulong startup_tiles_to_assign = 0UL;
+  ulong startup_tiles_to_assign    = 0UL;
   for( ulong j=0UL; j<topo->tile_cnt; j++ ) {
-    for( char const ** p = POST_START; *p; p++ ) {
-      if( !strcmp( topo->tiles[ j ].name, *p ) ) {
-        post_start_tiles_to_assign++;
-        break;
-      }
-    }
-    for( char const ** p = ALWAYS; *p; p++ ) {
-      if( !strcmp( topo->tiles[ j ].name, *p ) ) {
-        always_tiles_to_assign++;
-        break;
-      }
-    }
-    for( char const ** p = STARTUP; *p; p++ ) {
-      if( !strcmp( topo->tiles[ j ].name, *p ) ) {
-        startup_tiles_to_assign++;
-        break;
-      }
+    ulong f = topo->tiles[ j ].flags;
+    if( f & FD_TOPOB_TILE_FLOATING ) continue;
+    if( f & FD_TOPOB_TILE_POST_START ) {
+      post_start_tiles_to_assign++;
+    } else if( f & FD_TOPOB_TILE_STARTUP ) {
+      startup_tiles_to_assign++;
+    } else {
+      always_tiles_to_assign++;
     }
   }
   ulong tiles_to_assign = always_tiles_to_assign +
-      fd_ulong_max( startup_tiles_to_assign, post_start_tiles_to_assign );
+      fd_ulong_max( startup_tiles_to_assign,
+                    post_start_tiles_to_assign );
 
-  /* If we have enough physical cores (excluding HT siblings) for all
-     tiles that need assignment, exclude HT siblings so that no tile
-     gets scheduled on a hyperthread pair.
-     For Frankendancer, we reserve 2x cores so we have enough for Agave */
+  /* If we have enough physical cores (excluding HT siblings) for
+     all tiles that need assignment, exclude HT siblings so that no
+     tile gets scheduled on a hyperthread pair.
+     For Frankendancer, we reserve 2x cores so we have enough for
+     Agave. */
   _Bool skip_ht_pairs = reserve_agave_cores
     ? (available_physical>=2*tiles_to_assign) /* Frankendancer */
     : (available_physical>=tiles_to_assign);  /* Firedancer */
 
-  /* First, assign always-on tiles */
+  /* First, assign always-on tiles (no FLOATING, STARTUP, or
+     POST_START flag). */
   ulong cpu_idx = 0UL;
-  for( char const ** p = ALWAYS; *p; p++ ) {
-    for( ulong j=0UL; j<topo->tile_cnt; j++ ) {
-      fd_topo_tile_t * tile = &topo->tiles[ j ];
-      if( !strcmp( tile->name, *p ) ) {
-        auto_tile_cpu( tile, cpus, &cpu_idx, cpu_assigned, cpu_ordering, skip_ht_pairs );
-      }
-    }
+  for( ulong j=0UL; j<topo->tile_cnt; j++ ) {
+    fd_topo_tile_t * tile = &topo->tiles[ j ];
+    ulong f = tile->flags;
+    if( f & (FD_TOPOB_TILE_FLOATING |
+             FD_TOPOB_TILE_STARTUP  |
+             FD_TOPOB_TILE_POST_START) ) continue;
+    auto_tile_cpu( tile, cpus, &cpu_idx, cpu_assigned,
+                   cpu_ordering, skip_ht_pairs );
   }
+
   ulong cpu_idx_startup = cpu_idx;
   cpu_bv_t cpu_assigned_startup[ cpu_bv_word_cnt ];
   cpu_bv_copy( cpu_assigned_startup, cpu_assigned );
 
-  /* Separately assign startup and post-start tiles */
-  for( char const ** p = STARTUP; *p; p++ ) {
-    for( ulong j=0UL; j<topo->tile_cnt; j++ ) {
-      fd_topo_tile_t * tile = &topo->tiles[ j ];
-      if( !strcmp( tile->name, *p ) ) {
-        auto_tile_cpu( tile, cpus, &cpu_idx_startup, cpu_assigned_startup, cpu_ordering, skip_ht_pairs );
-      }
-    }
-  }
-  for( char const ** p = POST_START; *p; p++ ) {
-    for( ulong j=0UL; j<topo->tile_cnt; j++ ) {
-      fd_topo_tile_t * tile = &topo->tiles[ j ];
-      if( !strcmp( tile->name, *p ) ) {
-        auto_tile_cpu( tile, cpus, &cpu_idx, cpu_assigned, cpu_ordering, skip_ht_pairs );
-      }
-    }
+  /* Assign startup tiles (share cores with post-start). */
+  for( ulong j=0UL; j<topo->tile_cnt; j++ ) {
+    fd_topo_tile_t * tile = &topo->tiles[ j ];
+    if( !(tile->flags & FD_TOPOB_TILE_STARTUP) ) continue;
+    auto_tile_cpu( tile, cpus, &cpu_idx_startup,
+                   cpu_assigned_startup, cpu_ordering,
+                   skip_ht_pairs );
   }
 
-  /* Make sure all the tiles we haven't set are supposed to be floating. */
+  /* Assign post-start tiles. */
+  for( ulong j=0UL; j<topo->tile_cnt; j++ ) {
+    fd_topo_tile_t * tile = &topo->tiles[ j ];
+    if( !(tile->flags & FD_TOPOB_TILE_POST_START) ) continue;
+    auto_tile_cpu( tile, cpus, &cpu_idx, cpu_assigned,
+                   cpu_ordering, skip_ht_pairs );
+  }
+
+  /* Make sure all unassigned tiles have the floating flag. */
   for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
     fd_topo_tile_t * tile = &topo->tiles[ i ];
     if( tile->cpu_idx!=ULONG_MAX ) continue;
 
-    int found = 0;
-    for( char const ** p = FLOATING; *p; p++ ) {
-      if( !strcmp( tile->name, *p ) ) {
-        found = 1;
-        break;
-      }
-    }
-
-    if( FD_UNLIKELY( !found ) ) FD_LOG_WARNING(( "auto layout cannot affine tile `%s:%lu` because it is unknown. Leaving it floating", tile->name, tile->kind_id ));
+    if( FD_UNLIKELY( !(tile->flags & FD_TOPOB_TILE_FLOATING) ) )
+      FD_LOG_WARNING(( "auto layout cannot affine tile `%s:%lu`"
+                       " because it has no lifecycle flag."
+                       " Leaving it floating",
+                       tile->name, tile->kind_id ));
   }
 
   topo->agave_affinity_cnt = 0UL;
@@ -732,6 +635,163 @@ initialize_numa_assignments( fd_topo_t * topo ) {
     }
 
     if( FD_UNLIKELY( !found_lazy ) ) FD_LOG_ERR(( "no tile uses object %s for workspace %s", topo->objs[ max_obj ].name, topo->workspaces[ i ].name ));
+  }
+}
+
+
+/* fd_topob_connect: convenience wrapper around
+   fd_topob_connect_many for the common 1:1 case. */
+
+void
+fd_topob_connect( fd_topo_t *  topo,
+                  char const * producer,      char const * consumer,
+                  char const * link_name,     char const * link_wksp,
+                  char const * version,
+                  ulong depth, ulong mtu, ulong burst,
+                  int reliable, int polled ) {
+  fd_topob_connect_many( topo,
+      producer, 1UL, consumer, 1UL,
+      link_name, link_wksp, version,
+      depth, mtu, burst,
+      reliable, polled );
+}
+
+/* fd_topob_connect_many: create link instances and wire both
+   producer and consumer sides.  Idempotent on the link name --
+   if the links already exist, only the consumer side is wired. */
+
+void
+fd_topob_connect_many( fd_topo_t *  topo,
+                       char const * producer,      ulong producer_cnt,
+                       char const * consumer,      ulong consumer_cnt,
+                       char const * link_name,     char const * link_wksp,
+                       char const * version,
+                       ulong depth, ulong mtu, ulong burst,
+                       int reliable, int polled ) {
+  (void)version; /* TODO: version validation in Phase 3 */
+
+  /* Count existing links with this name */
+  ulong existing = 0UL;
+  for( ulong i=0UL; i<topo->link_cnt; i++ ) {
+    if( !strcmp( topo->links[ i ].name, link_name ) ) existing++;
+  }
+
+  if( !existing ) {
+    /* Create links and wire producers */
+    for( ulong i=0UL; i<producer_cnt; i++ ) {
+      fd_topob_link( topo, link_name, link_wksp, depth, mtu, burst );
+      fd_topob_tile_out( topo, producer, i, link_name, i );
+    }
+  }
+
+  /* Wire consumers (idempotent -- skip if already wired) */
+  for( ulong j=0UL; j<consumer_cnt; j++ ) {
+    ulong tile_id = fd_topo_find_tile( topo, consumer, j );
+    if( FD_UNLIKELY( tile_id==ULONG_MAX ) )
+      FD_LOG_ERR(( "consumer tile not found: %s:%lu",
+                   consumer, j ));
+    fd_topo_tile_t * tile = &topo->tiles[ tile_id ];
+    for( ulong i=0UL; i<producer_cnt; i++ ) {
+      ulong link_id = fd_topo_find_link( topo, link_name, i );
+      if( FD_UNLIKELY( link_id==ULONG_MAX ) )
+        FD_LOG_ERR(( "link not found: %s:%lu", link_name, i ));
+      /* Skip if already wired */
+      int already = 0;
+      for( ulong k=0UL; k<tile->in_cnt; k++ ) {
+        if( tile->in_link_id[ k ]==link_id ) {
+          already = 1;
+          break;
+        }
+      }
+      if( already ) continue;
+      fd_topob_tile_in( topo, consumer, j, "metric_in",
+                        link_name, i, reliable, polled );
+    }
+  }
+}
+
+/* fd_topob_publish: create link(s) with a producer but no
+   consumer.  Idempotent -- no-ops if the link already exists. */
+
+void
+fd_topob_publish( fd_topo_t *  topo,
+                  char const * producer,      ulong producer_cnt,
+                  char const * link_name,     char const * link_wksp,
+                  char const * version,
+                  ulong depth, ulong mtu, ulong burst ) {
+  (void)version; /* TODO: version validation in Phase 3 */
+
+  /* Count existing links with this name */
+  ulong existing = 0UL;
+  for( ulong i=0UL; i<topo->link_cnt; i++ ) {
+    if( !strcmp( topo->links[ i ].name, link_name ) ) existing++;
+  }
+
+  if( existing ) return; /* Idempotent */
+
+  /* Create links and wire producers.  Mark links as permitting
+     no consumers since subscribe/connect wires them later. */
+  for( ulong i=0UL; i<producer_cnt; i++ ) {
+    fd_topo_link_t * link = fd_topob_link( topo, link_name,
+                                           link_wksp, depth,
+                                           mtu, burst );
+    link->permit_no_consumers = 1;
+    fd_topob_tile_out( topo, producer, i, link_name, i );
+  }
+}
+
+/* fd_topob_subscribe: wire consumer(s) to an existing link
+   without knowing its creation parameters.  Pass 1 silently
+   skips missing links; pass 2 errors unless optional. */
+
+void
+fd_topob_subscribe( fd_topo_t *  topo,
+                    char const * consumer,      ulong consumer_cnt,
+                    char const * link_name,     char const * version,
+                    int reliable, int polled,   int optional,
+                    int pass ) {
+  (void)version; /* TODO: version validation in Phase 3 */
+
+  /* Count existing links with this name */
+  ulong link_instance_cnt = 0UL;
+  for( ulong i=0UL; i<topo->link_cnt; i++ ) {
+    if( !strcmp( topo->links[ i ].name, link_name ) )
+      link_instance_cnt++;
+  }
+
+  if( !link_instance_cnt ) {
+    /* Link does not exist */
+    if( pass==1 ) return; /* Pass 1: silently skip */
+    if( optional ) return; /* Optional: silently skip */
+    FD_LOG_ERR(( "required subscribe to link '%s' failed: "
+                 "link does not exist after pass 2",
+                 link_name ));
+  }
+
+  /* Wire consumers (idempotent -- skip if already wired) */
+  for( ulong j=0UL; j<consumer_cnt; j++ ) {
+    ulong tile_id = fd_topo_find_tile( topo, consumer, j );
+    if( FD_UNLIKELY( tile_id==ULONG_MAX ) )
+      FD_LOG_ERR(( "consumer tile not found: %s:%lu",
+                   consumer, j ));
+    fd_topo_tile_t * tile = &topo->tiles[ tile_id ];
+    for( ulong i=0UL; i<link_instance_cnt; i++ ) {
+      ulong link_id = fd_topo_find_link( topo, link_name, i );
+      if( FD_UNLIKELY( link_id==ULONG_MAX ) )
+        FD_LOG_ERR(( "link not found: %s:%lu",
+                     link_name, i ));
+      /* Skip if already wired */
+      int already = 0;
+      for( ulong k=0UL; k<tile->in_cnt; k++ ) {
+        if( tile->in_link_id[ k ]==link_id ) {
+          already = 1;
+          break;
+        }
+      }
+      if( already ) continue;
+      fd_topob_tile_in( topo, consumer, j, "metric_in",
+                        link_name, i, reliable, polled );
+    }
   }
 }
 

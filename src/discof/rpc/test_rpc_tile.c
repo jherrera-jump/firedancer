@@ -147,7 +147,7 @@ main( int     argc,
   fd_topo_link_t * link_rpc_replay = create_link( topo, wksp, "rpc_replay", 4UL, 0UL, 1UL );
   (void)link_rpc_replay;
 
-  fd_topo_tile_t * tile     = fd_topob_tile( topo, "rpc", "wksp", "wksp", 0UL, 0, 0, 0 );
+  fd_topo_tile_t * tile     = fd_topob_tile( topo, "rpc", "wksp", "wksp", 0UL );
   fd_topo_obj_t *  tile_obj = &topo->objs[ tile->tile_obj_id ];
   strcpy( tile->name, "rpc" );
   tile->rpc.max_live_slots = 16UL;

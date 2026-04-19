@@ -1,5 +1,6 @@
 #include "run/run.h"
 
+#include "../../../disco/topo/fd_topob.h"
 #include "../../../disco/metrics/fd_metrics.h"
 #include "../../../disco/metrics/generated/fd_metrics_replay.h"
 
@@ -25,7 +26,7 @@ ready_cmd_fn( args_t *   args,
     /* Don't wait for agave hosted tiles yet, they will take a
        long time, and aren't needed to start sending transactions
        anyway. */
-    if( FD_UNLIKELY( tile->is_agave ) ) continue;
+    if( FD_UNLIKELY( tile->flags & FD_TOPOB_TILE_IS_AGAVE ) ) continue;
 
     long start = fd_log_wallclock();
     int printed = 0;
@@ -33,7 +34,7 @@ ready_cmd_fn( args_t *   args,
       ulong status = fd_metrics_tile( tile->metrics )[ FD_METRICS_GAUGE_TILE_STATUS_OFF ];
 
       if( FD_LIKELY( status==1UL ) ) break;
-      else if( FD_UNLIKELY( tile->allow_shutdown && status==2UL ) ) break;
+      else if( FD_UNLIKELY( (tile->flags & FD_TOPOB_TILE_ALLOW_SHUTDOWN) && status==2UL ) ) break;
       else if( FD_UNLIKELY( status ) )
         FD_LOG_ERR(( "status for tile %s:%lu is in bad state %lu", tile->name, tile->kind_id, status ));
 

@@ -23,6 +23,26 @@
 #define FD_TOPOB_UNRELIABLE 0
 #define FD_TOPOB_RELIABLE 1
 
+/* When subscribing to a link, whether it is required or
+   optional.  An optional link will silently skip if it doesn't
+   exist. */
+
+#define FD_TOPOB_REQUIRED 0
+#define FD_TOPOB_OPTIONAL 1
+
+/* Tile lifecycle and behavioral attribute flags for
+   fd_topob_tile.  Combined via bitwise OR into a single
+   ulong flags parameter. */
+
+#define FD_TOPOB_TILE_FLOATING        (1UL<<0) /* not pinned to a core             */
+#define FD_TOPOB_TILE_STARTUP         (1UL<<1) /* runs only during startup         */
+#define FD_TOPOB_TILE_POST_START      (1UL<<2) /* starts after main tiles          */
+#define FD_TOPOB_TILE_CRITICAL        (1UL<<3) /* hyperthread twin bad             */
+#define FD_TOPOB_TILE_IS_AGAVE        (1UL<<4) /* Agave/JVM tile                   */
+#define FD_TOPOB_TILE_ALLOW_SHUTDOWN  (1UL<<5) /* tile can be shut down gracefully */
+#define FD_TOPOB_TILE_USES_ID_KEYSWITCH (1UL<<6) /* uses identity keyswitch       */
+#define FD_TOPOB_TILE_USES_AV_KEYSWITCH (1UL<<7) /* uses authority voter keyswitch */
+
 FD_PROTOTYPES_BEGIN
 
 /* Initialize a new fd_topo_t with the given app name and at the memory address
@@ -96,14 +116,11 @@ fd_topob_link( fd_topo_t *  topo,
    workspaces when it is attached. */
 
 fd_topo_tile_t *
-fd_topob_tile( fd_topo_t *    topo,
-               char const *   tile_name,
-               char const *   tile_wksp,
-               char const *   metrics_wksp,
-               ulong          cpu_idx,
-               int            is_agave,
-               int            uses_id_keyswitch,
-               int            uses_av_keyswitch );
+fd_topob_tile( fd_topo_t *  topo,
+               char const * tile_name,
+               char const * tile_wksp,
+               char const * metrics_wksp,
+               ulong        flags );
 
 /* Add an input link to the tile.  If the tile is created with fd_stem,
    it will automatically poll the in link and forward fragments to the
@@ -160,6 +177,66 @@ fd_topob_auto_layout_cpus( fd_topo_t *      topo,
 void
 fd_topob_finish( fd_topo_t *                topo,
                  fd_topo_obj_callbacks_t ** callbacks );
+
+/* fd_topob_connect creates a link and wires both producer and
+   consumer in one call.  Idempotent on the link name -- if the
+   link already exists, the producer/depth/mtu/burst/link_wksp
+   parameters are ignored and only the consumer side is wired.
+   1:1 -- one producer instance to one consumer instance.
+   version may be NULL for core-internal links. */
+
+void
+fd_topob_connect( fd_topo_t *  topo,
+                  char const * producer,      char const * consumer,
+                  char const * link_name,     char const * link_wksp,
+                  char const * version,
+                  ulong depth, ulong mtu, ulong burst,
+                  int reliable, int polled );
+
+/* fd_topob_connect_many creates N link instances and wires each
+   producer:i out on link:i, each consumer:j in on all
+   link:0..N-1.  Idempotent on the link name -- if the links
+   already exist, only consumer side is wired.
+   Subsumes 1:N (producer_cnt=1) and N:1 (consumer_cnt=1).
+   version may be NULL for core-internal links. */
+
+void
+fd_topob_connect_many( fd_topo_t *  topo,
+                       char const * producer,      ulong producer_cnt,
+                       char const * consumer,      ulong consumer_cnt,
+                       char const * link_name,     char const * link_wksp,
+                       char const * version,
+                       ulong depth, ulong mtu, ulong burst,
+                       int reliable, int polled );
+
+/* fd_topob_publish creates link(s) with a producer but no
+   consumer.  Used when a tile exposes a link for others to
+   subscribe to or connect to later.  Idempotent -- no-ops if the
+   link already exists.
+   version may be NULL for core-internal links. */
+
+void
+fd_topob_publish( fd_topo_t *  topo,
+                  char const * producer,      ulong producer_cnt,
+                  char const * link_name,     char const * link_wksp,
+                  char const * version,
+                  ulong depth, ulong mtu, ulong burst );
+
+/* fd_topob_subscribe wires consumer(s) to an existing link
+   without knowing its creation parameters.  Behavior depends on
+   the framework's current pass:
+     Pass 1: silently skips if the link doesn't exist yet.
+     Pass 2: FD_LOG_ERR if the link still doesn't exist,
+             UNLESS optional -- then silently skip on both passes.
+   version is the consumer's expected semver.
+   pass should be 1 or 2, indicating which dispatch pass. */
+
+void
+fd_topob_subscribe( fd_topo_t *  topo,
+                    char const * consumer,      ulong consumer_cnt,
+                    char const * link_name,     char const * version,
+                    int reliable, int polled,   int optional,
+                    int pass );
 
 FD_PROTOTYPES_END
 

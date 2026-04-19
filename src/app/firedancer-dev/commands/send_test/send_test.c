@@ -75,14 +75,14 @@ send_test_topo( config_t * config ) {
   /* Check if we should use live gossip or mock gossip */
   int use_live_gossip = !strcmp( send_test_args.gossip_file, "live" );
 
-  fd_core_subtopo( config, tile_to_cpu );
+  fd_core_subtopo( config );
   if( use_live_gossip ) fd_gossip_subtopo( config, tile_to_cpu );
 
   #define FOR(cnt) for( ulong i=0UL; i<cnt; i++ )
 
   /* Add send tile */
   fd_topob_wksp( topo, "txsend" );
-  fd_topob_tile( topo, "txsend", "txsend", "metric_in", tile_to_cpu[ topo->tile_cnt ], 0, 0, 0 );
+  fd_topob_tile( topo, "txsend", "txsend", "metric_in", 0UL );
 
   /* wksps for send links */
   fd_topob_wksp( topo, "txsend_net" );
@@ -141,6 +141,13 @@ send_test_topo( config_t * config ) {
   for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
     fd_topo_tile_t * tile = &topo->tiles[ i ];
     fd_topo_configure_tile( tile, config );
+  }
+
+  /* Apply explicit CPU affinity when not using auto layout. */
+  if( FD_LIKELY( strcmp( config->layout.affinity, "auto" ) ) ) {
+    for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
+      topo->tiles[ i ].cpu_idx = tile_to_cpu[ i ];
+    }
   }
 
   /* Finish topology setup */

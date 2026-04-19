@@ -2,6 +2,7 @@
 #include "../../shared/fd_config.h"
 #include "../../shared/fd_action.h"
 #include "../../platform/fd_sys_util.h"
+#include "../../../disco/topo/fd_topob.h"
 #include "../../../disco/metrics/fd_metrics.h"
 #include "../../../util/pod/fd_pod.h"
 
@@ -112,7 +113,7 @@ flame_cmd_fn( args_t *   args,
 
     FD_TEST( pid<=INT_MAX );
     if( FD_UNLIKELY( -1==kill( (int)tid, 0 ) ) ) {
-      if( FD_LIKELY( config->topo.tiles[ i ].allow_shutdown ) ) continue;
+      if( FD_LIKELY( config->topo.tiles[ i ].flags & FD_TOPOB_TILE_ALLOW_SHUTDOWN ) ) continue;
 
       if( FD_UNLIKELY( errno==ESRCH ) ) FD_LOG_ERR(( "tile %s:%lu is not running", config->topo.tiles[ i ].name, config->topo.tiles[ i ].kind_id ));
       else                              FD_LOG_ERR(( "kill() failed (%i-%s)", errno, fd_io_strerror( errno ) ));
