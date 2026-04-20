@@ -10,7 +10,7 @@ OBJDIR:=$(BASEDIR)/$(BUILDDIR)
 #
 # Use ?= so that users can (optionally) perform partial compilation in special
 # circumstances.
-LOCAL_MKS?=$(shell $(FIND) -L src -type f -name Local.mk)
+LOCAL_MKS?=$(shell $(FIND) -L src plugin -type f -name Local.mk 2>/dev/null)
 
 CPPFLAGS+=-DFD_BUILD_INFO=\"$(OBJDIR)/info\"
 CPPFLAGS+=$(EXTRA_CPPFLAGS)
@@ -78,11 +78,11 @@ help:
 
 info: $(OBJDIR)/info
 
-clean: frontend-clean
+clean: frontend-clean $(PLUGIN_CLEAN_TARGETS)
 	$(RMDIR) $(OBJDIR) && $(RMDIR) target && $(RMDIR) agave/target && \
 $(SCRUB)
 
-distclean:
+distclean: $(PLUGIN_CLEAN_TARGETS)
 	$(RMDIR) $(BASEDIR) && $(RMDIR) target && $(RMDIR) agave/target && \
 $(SCRUB)
 
@@ -370,6 +370,32 @@ endef
 
 # Include all of the Local.mk files we found earlier
 $(foreach mk,$(LOCAL_MKS),$(eval $(call _include-mk,$(mk))))
+
+# ---- Plugin registry generation ----
+# Generate fd_plugin_registry.h from accumulated plugin metadata.
+
+GENERATED_PLUGIN_REGISTRY := $(OBJDIR)/generated/fd_plugin_registry.h
+
+$(GENERATED_PLUGIN_REGISTRY): plugin/Plugin.mk $(wildcard plugin/*/Local.mk)
+	@mkdir -p $(dir $@) && { \
+	echo '/* fd_plugin_registry.h - auto-generated, do not edit */'; \
+	echo '#ifndef FD_PLUGIN_REGISTRY_H'; \
+	echo '#define FD_PLUGIN_REGISTRY_H'; \
+	echo '#include "../../src/disco/topo/fd_topob.h"'; \
+	$(foreach n,$(PLUGIN_NAMES),$(foreach t,$(PLUGIN_TILE_RUNS_$(n)),echo 'extern fd_topo_run_tile_t $(t);';)) \
+	$(foreach n,$(PLUGIN_NAMES),echo 'extern void $(or $(PLUGIN_TOPO_FN_$(n)),fd_$(n)_topo)( fd_topo_t * topo );';) \
+	echo 'static fd_topo_run_tile_t * PLUGIN_TILES[] = {'; \
+	$(foreach n,$(PLUGIN_NAMES),$(foreach t,$(PLUGIN_TILE_RUNS_$(n)),echo '  &$(t),';)) \
+	echo '  NULL,'; \
+	echo '};'; \
+	echo 'static fd_plugin_entry_t PLUGIN_TOPOS[] = {'; \
+	$(foreach n,$(PLUGIN_NAMES),echo '  { "$(n)", $(or $(PLUGIN_TOPO_FN_$(n)),fd_$(n)_topo) },';) \
+	echo '  { NULL, NULL },'; \
+	echo '};'; \
+	echo '#endif'; \
+	} > $@
+
+all: $(GENERATED_PLUGIN_REGISTRY)
 
 # Include all the dependencies.  Must be after the make fragments
 # include so that DEPFILES is fully populated (similarly for the

@@ -83,3 +83,6 @@ venv
 # LLMs
 .claude
 .codex
+
+# Plugin generated files
+plugin/*/generated/
