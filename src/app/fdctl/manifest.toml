@@ -1,0 +1,39 @@
+# Frankendancer (fdctl) link manifest.
+#
+# Lists links exposed to plugins for version compatibility
+# checking.  Internal links are omitted — only cross-boundary
+# links need entries.
+#
+# Versions use semver.  A version covers the full link
+# contract: payload struct layout and signal/control schema.
+# Size parameters (depth, mtu, burst) are not versioned.
+
+[[produces]]
+link    = "plugin_out"
+version = "1.0.0"
+mtu     = 17160120 # FD_STAKE_OUT_MTU
+
+[[produces]]
+link    = "pohh_pack"
+version = "1.0.0"
+mtu     = 272      # sizeof(fd_became_leader_t)
+
+[[produces]]
+link    = "pack_bank"
+version = "1.0.0"
+mtu     = 65535    # USHORT_MAX
+
+[[produces]]
+link    = "pack_pohh"
+version = "1.0.0"
+mtu     = 472      # sizeof(fd_done_packing_t)
+
+[[produces]]
+link    = "bank_pohh"
+version = "1.0.0"
+mtu     = 65535    # USHORT_MAX
+
+[[produces]]
+link    = "bundle_status"
+version = "1.0.0"
+mtu     = 316      # sizeof(fd_bundle_block_engine_update_t)

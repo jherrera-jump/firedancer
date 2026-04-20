@@ -1,0 +1,109 @@
+# Core Firedancer link manifest.
+#
+# Lists links exposed to plugins for version compatibility
+# checking.  Internal links (e.g., snapin_wm, verify_dedup)
+# are omitted — only cross-boundary links need entries.
+#
+# Versions use semver.  A version covers the full link
+# contract: payload struct layout and signal/control schema.
+# Size parameters (depth, mtu, burst) are not versioned.
+
+[[produces]]
+link    = "replay_out"
+version = "1.0.0"
+mtu     = 2240      # sizeof(fd_replay_message_t)
+
+[[produces]]
+link    = "replay_epoch"
+version = "1.0.0"
+mtu     = 17162328  # FD_EPOCH_OUT_MTU
+
+[[produces]]
+link    = "gossip_out"
+version = "1.0.0"
+mtu     = 1320      # sizeof(fd_gossip_update_message_t)
+
+[[produces]]
+link    = "gossip_net"
+version = "1.0.0"
+mtu     = 2048      # FD_NET_MTU
+
+[[produces]]
+link    = "shred_out"
+version = "1.0.0"
+mtu     = 1264      # sizeof(fd_shred_message_t)
+
+[[produces]]
+link    = "repair_out"
+version = "1.0.0"
+mtu     = 153       # sizeof(fd_fec_complete_t)
+
+[[produces]]
+link    = "repair_net"
+version = "1.0.0"
+mtu     = 2048      # FD_NET_MTU
+
+[[produces]]
+link    = "tower_out"
+version = "1.0.0"
+mtu     = 3264      # sizeof(fd_tower_msg_t)
+
+[[produces]]
+link    = "txsend_out"
+version = "1.0.0"
+mtu     = 1312      # FD_TPU_RAW_MTU
+
+[[produces]]
+link    = "genesi_out"
+version = "1.0.0"
+mtu     = 0         # signal-only
+
+[[produces]]
+link    = "ipecho_out"
+version = "1.0.0"
+mtu     = 0         # signal-only
+
+[[produces]]
+link    = "net_gossvf"
+version = "1.0.0"
+mtu     = 2048      # FD_NET_MTU
+
+[[produces]]
+link    = "pack_poh"
+version = "1.0.0"
+mtu     = 472       # sizeof(fd_done_packing_t)
+
+[[produces]]
+link    = "pack_execle"
+version = "1.0.0"
+mtu     = 65535     # USHORT_MAX
+
+[[produces]]
+link    = "execle_poh"
+version = "1.0.0"
+mtu     = 65535     # USHORT_MAX
+
+[[produces]]
+link    = "execrp_replay"
+version = "1.0.0"
+mtu     = 120       # sizeof(fd_execrp_task_done_msg_t)
+
+[[produces]]
+link    = "snapct_gui"
+version = "1.0.0"
+mtu     = 4104      # sizeof(fd_snapct_update_t)
+
+[[produces]]
+link    = "snapin_gui"
+version = "1.0.0"
+mtu     = 643       # FD_GUI_CONFIG_PARSE_MAX_VALID_ACCT_SZ
+
+[[produces]]
+link    = "snapin_manif"
+version = "1.0.0"
+mtu     = 590204480 # sizeof(fd_snapshot_manifest_t)
+
+[[produces]]
+link    = "bundle_status"
+version = "1.0.0"
+mtu     = 316       # sizeof(fd_bundle_block_engine_update_t)

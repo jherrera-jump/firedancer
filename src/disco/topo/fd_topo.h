@@ -74,6 +74,9 @@ typedef struct {
   ulong id;           /* The ID of this link.  Indexed from [0, link_cnt).  When placed in a topology, the ID must be the index of the link in the links list. */
   char  name[ 14UL ]; /* The name of this link, like "pack_execle". There can be multiple of each link name in a topology. */
   ulong kind_id;      /* The ID of this link within its name.  If there are N links of a particular name, they have IDs [0, N).  The pair (name, kind_id) uniquely identifies a link, as does "id" on its own. */
+  char  version[ 12UL ]; /* Semver version string (e.g. "3.0.0").
+                            Empty string if unversioned (core-
+                            internal links). */
 
   ulong depth;    /* The depth of the mcache representing the link. */
   ulong mtu;      /* The MTU of data fragments in the mcache.  A value of 0 means there is no dcache. */

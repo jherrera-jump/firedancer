@@ -129,6 +129,7 @@ fd_topob_link( fd_topo_t *  topo,
 
   fd_topo_link_t * link = &topo->links[ topo->link_cnt ];
   strncpy( link->name, link_name, sizeof(link->name) );
+  link->version[0] = '\0';
   link->id       = topo->link_cnt;
   link->kind_id  = kind_id;
   link->depth    = depth;
@@ -708,8 +709,6 @@ fd_topob_connect_many( fd_topo_t *  topo,
                        char const * version,
                        ulong depth, ulong mtu, ulong burst,
                        int reliable, int polled ) {
-  (void)version; /* TODO: version validation in Phase 3 */
-
   /* Count existing links with this name */
   ulong existing = 0UL;
   for( ulong i=0UL; i<topo->link_cnt; i++ ) {
@@ -719,7 +718,11 @@ fd_topob_connect_many( fd_topo_t *  topo,
   if( !existing ) {
     /* Create links and wire producers */
     for( ulong i=0UL; i<producer_cnt; i++ ) {
-      fd_topob_link( topo, link_name, link_wksp, depth, mtu, burst );
+      fd_topo_link_t * link = fd_topob_link( topo, link_name, link_wksp, depth, mtu, burst );
+      if( version ) {
+        strncpy( link->version, version, sizeof(link->version) );
+        link->version[ sizeof(link->version)-1 ] = '\0';
+      }
       fd_topob_tile_out( topo, producer, i, link_name, i );
     }
   }
@@ -759,8 +762,6 @@ fd_topob_publish( fd_topo_t *  topo,
                   char const * link_name,     char const * link_wksp,
                   char const * version,
                   ulong depth, ulong mtu, ulong burst ) {
-  (void)version; /* TODO: version validation in Phase 3 */
-
   /* Count existing links with this name */
   ulong existing = 0UL;
   for( ulong i=0UL; i<topo->link_cnt; i++ ) {
@@ -776,6 +777,10 @@ fd_topob_publish( fd_topo_t *  topo,
                                            link_wksp, depth,
                                            mtu, burst );
     link->permit_no_consumers = 1;
+    if( version ) {
+      strncpy( link->version, version, sizeof(link->version) );
+      link->version[ sizeof(link->version)-1 ] = '\0';
+    }
     fd_topob_tile_out( topo, producer, i, link_name, i );
   }
 }
