@@ -404,6 +404,21 @@ validate( fd_topo_t const * topo ) {
       FD_LOG_ERR(( "link %lu (%s:%lu) has 0 consumers", i, topo->links[ i ].name, topo->links[ i ].kind_id ));
     }
   }
+
+  /* Versioned links with the same name must have consistent versions */
+  for( ulong i=0UL; i<topo->link_cnt; i++ ) {
+    if( !topo->links[ i ].version[0] ) continue; /* unversioned */
+    for( ulong j=i+1UL; j<topo->link_cnt; j++ ) {
+      if( strcmp( topo->links[ i ].name, topo->links[ j ].name ) ) continue;
+      if( !topo->links[ j ].version[0] ) continue;
+      if( FD_UNLIKELY( strcmp( topo->links[ i ].version, topo->links[ j ].version ) ) )
+        FD_LOG_ERR(( "link %s has inconsistent versions: "
+                     "kind_id %lu is %s, kind_id %lu is %s",
+                     topo->links[ i ].name,
+                     topo->links[ i ].kind_id, topo->links[ i ].version,
+                     topo->links[ j ].kind_id, topo->links[ j ].version ));
+    }
+  }
 }
 
 static void

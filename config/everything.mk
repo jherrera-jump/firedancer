@@ -409,6 +409,22 @@ $(GENERATED_PLUGIN_REGISTRY): plugin/Plugin.mk $(wildcard plugin/*/Local.mk)
 
 all: $(GENERATED_PLUGIN_REGISTRY)
 
+# ---- Manifest validation ----
+# Validate each binary's manifests separately (firedancer and fdctl
+# produce overlapping links and must not be checked together).
+
+PLUGIN_MANIFESTS := $(wildcard plugin/*/manifest.toml)
+FD_MANIFESTS     := $(wildcard src/app/firedancer/manifest.toml) $(PLUGIN_MANIFESTS)
+FRANK_MANIFESTS  := $(wildcard src/app/fdctl/manifest.toml) $(PLUGIN_MANIFESTS)
+
+$(OBJDIR)/generated/.manifests_validated: $(FD_MANIFESTS) $(FRANK_MANIFESTS) contrib/codegen/validate_manifests.py
+	@mkdir -p $(dir $@) && \
+	$(PYTHON) contrib/codegen/validate_manifests.py $(FD_MANIFESTS) && \
+	$(PYTHON) contrib/codegen/validate_manifests.py $(FRANK_MANIFESTS) && \
+	touch $@
+
+all: $(OBJDIR)/generated/.manifests_validated
+
 # Include all the dependencies.  Must be after the make fragments
 # include so that DEPFILES is fully populated (similarly for the
 # show-deps target).
