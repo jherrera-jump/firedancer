@@ -1,0 +1,124 @@
+# GUI plugin link manifest.
+#
+# Lists all links consumed by the GUI tile across both
+# Firedancer and Frankendancer topologies.  The topology
+# function selects the appropriate subset at runtime.
+
+[plugin]
+name = "gui"
+
+# Firedancer links
+
+[[consumes]]
+link    = "net_gossvf"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "repair_net"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "shred_out"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "gossip_net"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "gossip_out"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "tower_out"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "replay_out"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "replay_epoch"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "genesi_out"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "pack_poh"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "pack_execle"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "execle_poh"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "execrp_replay"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "snapct_gui"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "snapin_gui"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "snapin_manif"
+version = "1.0.0"
+mtu     = 0
+
+# Frankendancer links
+
+[[consumes]]
+link    = "plugin_out"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "pohh_pack"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "pack_bank"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "pack_pohh"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "bank_pohh"
+version = "1.0.0"
+mtu     = 0
+
+# Shared
+
+[[consumes]]
+link    = "bundle_status"
+version = "1.0.0"
+mtu     = 0

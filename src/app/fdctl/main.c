@@ -53,7 +53,6 @@ extern fd_topo_run_tile_t fd_tile_shred;
 extern fd_topo_run_tile_t fd_tile_sign;
 extern fd_topo_run_tile_t fd_tile_metric;
 extern fd_topo_run_tile_t fd_tile_diag;
-extern fd_topo_run_tile_t fd_tile_gui;
 extern fd_topo_run_tile_t fd_tile_plugin;
 extern fd_topo_run_tile_t fd_tile_resolh;
 extern fd_topo_run_tile_t fd_tile_pohh;
@@ -73,7 +72,6 @@ fd_topo_run_tile_t * TILES[] = {
   &fd_tile_sign,
   &fd_tile_metric,
   &fd_tile_diag,
-  &fd_tile_gui,
   &fd_tile_plugin,
   &fd_tile_resolh,
   &fd_tile_pohh,

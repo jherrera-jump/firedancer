@@ -870,20 +870,6 @@ fd_topob_plugin_dispatch( fd_topo_t *               topo,
 }
 
 void
-fd_topob_plugin_config( fd_topo_t *    topo,
-                        char const *   plugin_name,
-                        uchar const *  config_pod ) {
-  if( FD_UNLIKELY( !topo || !plugin_name || !config_pod ) ) return;
-
-  char path[ 256 ];
-  int n = snprintf( path, sizeof(path), "plugins.%s", plugin_name );
-  if( FD_UNLIKELY( n<0 || (ulong)n>=sizeof(path) ) )
-    FD_LOG_ERR(( "plugin name too long: %s", plugin_name ));
-
-  FD_TEST( fd_pod_insert_subpod( topo->props, path, config_pod ) );
-}
-
-void
 fd_topob_finish( fd_topo_t *                topo,
                  fd_topo_obj_callbacks_t ** callbacks ) {
   for( ulong z=0UL; z<topo->tile_cnt; z++ ) {

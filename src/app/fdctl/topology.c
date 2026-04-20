@@ -274,16 +274,6 @@ fd_topo_initialize( config_t * config ) {
     /**/                 fd_topob_tile_in(  topo, "plugin", 0UL,           "metric_in", "valcfg_plugi", 0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
   }
 
-  if( FD_LIKELY( config->tiles.gui.enabled ) ) {
-    fd_topob_wksp( topo, "gui"          );
-    /**/                 fd_topob_tile( topo, "gui",     "gui",     "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH | FD_TOPOB_TILE_CRITICAL );
-    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "plugin_out",   0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
-    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "pohh_pack",    0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
-    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "pack_bank",    0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
-    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "pack_pohh",    0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
-    FOR(bank_tile_cnt)   fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "bank_pohh",    i,            FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
-  }
-
   if( FD_UNLIKELY( config->tiles.bundle.enabled ) ) {
     fd_topob_wksp( topo, "bundle_verif" );
     fd_topob_wksp( topo, "bundle_sign"  );
@@ -313,15 +303,12 @@ fd_topo_initialize( config_t * config ) {
     /**/                 fd_topob_tile_in(  topo, "pack",   0UL,           "metric_in", "sign_pack",      0UL,        FD_TOPOB_UNRELIABLE, FD_TOPOB_UNPOLLED );
     /**/                 fd_topob_tile_out( topo, "sign",   0UL,                        "sign_pack",      0UL                                                );
 
-    if( config->tiles.gui.enabled ) { /* GUI is the only consumer of bundle_status */
-      fd_topob_wksp( topo, "bundle_status" );
-      /* bundle_status must be kind of deep, to prevent exhausting
-         shared flow control credits when publishing many packets at
-         once. */
-      fd_topob_link( topo, "bundle_status", "bundle_status", 65536UL, sizeof(fd_bundle_block_engine_update_t), 1UL );
-      fd_topob_tile_in( topo, "gui", 0UL, "metric_in", "bundle_status", 0UL, FD_TOPOB_RELIABLE, FD_TOPOB_POLLED );
-      fd_topob_tile_out( topo, "bundle", 0UL, "bundle_status", 0UL );
-    }
+    fd_topob_wksp( topo, "bundle_status" );
+    /* bundle_status must be kind of deep, to prevent exhausting
+       shared flow control credits when publishing many packets at
+       once. */
+    fd_topob_link( topo, "bundle_status", "bundle_status", 65536UL, sizeof(fd_bundle_block_engine_update_t), 1UL )->permit_no_consumers = 1;
+    fd_topob_tile_out( topo, "bundle", 0UL, "bundle_status", 0UL );
   }
 
   if( FD_LIKELY( !is_auto_affinity ) ) {
@@ -411,7 +398,6 @@ fd_topo_initialize( config_t * config ) {
   for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
     fd_topo_tile_t * tile = &topo->tiles[ i ];
     fd_topo_configure_tile( tile, config );
-    if( FD_UNLIKELY( !strcmp( tile->name, "gui" ) ) ) tile->gui.tile_cnt = topo->tile_cnt;
   }
 
   /* Apply explicit CPU affinity when not using auto layout. */
@@ -551,22 +537,6 @@ fd_topo_configure_tile( fd_topo_tile_t * tile,
     tile->metric.prometheus_listen_port = config->tiles.metric.prometheus_listen_port;
 
   } else if( FD_UNLIKELY( !strcmp( tile->name, "diag" ) ) ) {
-
-  } else if( FD_UNLIKELY( !strcmp( tile->name, "gui" ) ) ) {
-    if( FD_UNLIKELY( !fd_cstr_to_ip4_addr( config->tiles.gui.gui_listen_address, &tile->gui.listen_addr ) ) )
-      FD_LOG_ERR(( "failed to parse gui listen address `%s`", config->tiles.gui.gui_listen_address ));
-    tile->gui.listen_port = config->tiles.gui.gui_listen_port;
-    tile->gui.is_voting = strcmp( config->paths.vote_account, "" );
-    fd_cstr_ncpy( tile->gui.cluster, config->cluster, sizeof(tile->gui.cluster) );
-    fd_cstr_ncpy( tile->gui.identity_key_path, config->paths.identity_key, sizeof(tile->gui.identity_key_path) );
-    fd_cstr_ncpy( tile->gui.vote_key_path, config->paths.vote_account, sizeof(tile->gui.vote_key_path) );
-    tile->gui.max_http_connections      = config->tiles.gui.max_http_connections;
-    tile->gui.max_websocket_connections = config->tiles.gui.max_websocket_connections;
-    tile->gui.max_http_request_length   = config->tiles.gui.max_http_request_length;
-    tile->gui.send_buffer_size_mb       = config->tiles.gui.send_buffer_size_mb;
-    tile->gui.schedule_strategy         = config->tiles.pack.schedule_strategy_enum;
-    tile->gui.websocket_compression     = config->development.gui.websocket_compression;
-    tile->gui.frontend_release_channel  = config->development.gui.frontend_release_channel_enum;
 
   } else if( FD_UNLIKELY( !strcmp( tile->name, "plugin" ) ) ) {
 

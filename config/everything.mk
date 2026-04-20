@@ -335,6 +335,18 @@ $(OBJDIR)/obj/%.i : src/%.cxx $(OBJDIR)/info
 	$(MKDIR) $(dir $@) && \
 $(CXX) $(CPPFLAGS) $(CXXFLAGS) -E $< -o $@
 
+# Plugin compile rules (mirror the src/ rules above)
+
+$(OBJDIR)/plugin/%.d : plugin/%.c $(OBJDIR)/info
+	$(MKDIR) $(dir $@) && \
+$(CC) $(CPPFLAGS) $(CFLAGS) -M -MP $< -o $@.tmp && \
+$(SED) 's,\($(notdir $*)\)\.o[ :]*,$(OBJDIR)/plugin/$*.o $(OBJDIR)/plugin/$*.S $(OBJDIR)/plugin/$*.i $@ : ,g' < $@.tmp > $@ && \
+$(RM) $@.tmp
+
+$(OBJDIR)/plugin/%.o : plugin/%.c $(OBJDIR)/info
+	$(MKDIR) $(dir $@) && \
+$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
 $(OBJDIR)/obj/%.check : src/%.c
 	@$(CC) $(CPPFLAGS) $(CFLAGS) -fsyntax-only $<
 
