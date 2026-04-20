@@ -1,0 +1,28 @@
+# RPC plugin manifest.
+#
+# Declares links consumed from core and produced by this plugin.
+# Versions use semver for compatibility checking at build time
+# and startup.
+
+[plugin]
+name = "rpc"
+
+[[consumes]]
+link    = "replay_out"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "genesi_out"
+version = "1.0.0"
+mtu     = 0
+
+[[consumes]]
+link    = "gossip_out"
+version = "1.0.0"
+mtu     = 0
+
+[[produces]]
+link    = "rpc_replay"
+version = "1.0.0"
+mtu     = 0

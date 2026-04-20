@@ -387,7 +387,6 @@ fd_topo_initialize( config_t * config ) {
   int snapshots_enabled = !!config->gossip.entrypoints_cnt;
   int vinyl_enabled     = !config->firedancer.accounts.in_memory_only;
   int snapshot_lthash_disabled = config->development.snapshots.disable_lthash_verification;
-  int rpc_enabled       = config->tiles.rpc.enabled;
   int telemetry_enabled = config->telemetry && strcmp( config->tiles.event.url, "" );
   int leader_enabled    = !!config->firedancer.layout.enable_block_production;
 
@@ -731,12 +730,6 @@ fd_topo_initialize( config_t * config ) {
   }
   FOR(sign_tile_cnt)   fd_topob_tile( topo, "sign",    "sign",    "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH | FD_TOPOB_TILE_USES_AV_KEYSWITCH );
 
-  if( FD_UNLIKELY( rpc_enabled ) ) {
-    fd_topob_wksp( topo, "rpc" );
-    fd_topob_wksp( topo, "rpc_replay" );
-    fd_topob_tile( topo, "rpc", "rpc", "metric_in", FD_TOPOB_TILE_USES_ID_KEYSWITCH );
-  }
-
   if( vinyl_enabled ) {
     setup_topo_accdb_meta( topo, &config->firedancer );
 
@@ -765,9 +758,6 @@ fd_topo_initialize( config_t * config ) {
     }
     fd_topob_tile_uses( topo, &topo->tiles[ fd_topo_find_tile( topo, "tower", 0UL ) ], accdb_data, FD_SHMEM_JOIN_MODE_READ_ONLY );
     FOR(resolv_tile_cnt) fd_topob_tile_uses( topo, &topo->tiles[ fd_topo_find_tile( topo, "resolv", i ) ], accdb_data, FD_SHMEM_JOIN_MODE_READ_ONLY );
-    if( rpc_enabled ) {
-      fd_topob_tile_uses( topo, &topo->tiles[ fd_topo_find_tile( topo, "rpc", 0UL ) ], accdb_data, FD_SHMEM_JOIN_MODE_READ_ONLY );
-    }
 
     fd_topob_wksp( topo, "accdb_genesi" );
     fd_topob_wksp( topo, "accdb_replay" );
@@ -775,7 +765,6 @@ fd_topo_initialize( config_t * config ) {
     if( leader_enabled ) fd_topob_wksp( topo, "accdb_execle" );
     fd_topob_wksp( topo, "accdb_tower"  );
     if( leader_enabled ) fd_topob_wksp( topo, "accdb_resolv" );
-    if( config->tiles.rpc.enabled ) fd_topob_wksp( topo, "accdb_rpc" );
   }
 
   if( FD_UNLIKELY( solcap_enabled ) ) {
@@ -1113,16 +1102,6 @@ fd_topo_initialize( config_t * config ) {
     /* No default fd_topob_tile_in connection to stake_out */
   }
 
-  if( FD_UNLIKELY( rpc_enabled ) ) {
-    fd_topob_link( topo, "rpc_replay", "rpc_replay", 8UL, 0UL, 1UL );
-    fd_topob_tile_out( topo, "rpc", 0UL, "rpc_replay", 0UL );
-
-    fd_topob_tile_in( topo, "rpc",    0UL, "metric_in", "replay_out", 0UL, FD_TOPOB_RELIABLE, FD_TOPOB_POLLED );
-    fd_topob_tile_in( topo, "rpc",    0UL, "metric_in", "genesi_out", 0UL, FD_TOPOB_RELIABLE, FD_TOPOB_POLLED );
-    fd_topob_tile_in( topo, "replay", 0UL, "metric_in", "rpc_replay", 0UL, FD_TOPOB_RELIABLE, FD_TOPOB_POLLED );
-    fd_topob_tile_in( topo, "rpc",    0UL, "metric_in", "gossip_out", 0UL, FD_TOPOB_RELIABLE, FD_TOPOB_POLLED );
-  }
-
   if( FD_UNLIKELY( solcap_enabled ) ) {
     fd_topob_link( topo, "cap_repl", "solcap", 32UL, SOLCAP_WRITE_ACCOUNT_DATA_MTU, 1UL );
     fd_topob_tile_out( topo, "replay", 0UL, "cap_repl", 0UL );
@@ -1365,11 +1344,6 @@ fd_topo_initialize( config_t * config ) {
     fd_topob_tile_uses( topo, &topo->tiles[ fd_topo_find_tile( topo, "snapin", 0UL ) ], funk_locks_obj, FD_SHMEM_JOIN_MODE_READ_WRITE );
   }
 
-  if( FD_UNLIKELY( rpc_enabled ) ) {
-    fd_topob_tile_uses( topo, &topo->tiles[ fd_topo_find_tile( topo, "rpc", 0UL ) ], funk_obj,       FD_SHMEM_JOIN_MODE_READ_ONLY  );
-    fd_topob_tile_uses( topo, &topo->tiles[ fd_topo_find_tile( topo, "rpc", 0UL ) ], funk_locks_obj, FD_SHMEM_JOIN_MODE_READ_WRITE );
-  }
-
   fd_pod_insert_int( topo->props, "sandbox", config->development.sandbox ? 1 : 0 );
 
   if( vinyl_enabled ) {
@@ -1383,9 +1357,6 @@ fd_topo_initialize( config_t * config ) {
     }
     fd_topob_vinyl_rq( topo, "tower", 0UL, "accdb_tower", "tower", 4UL, 128UL, 128UL, FD_VINYL_PERM_READ_ONLY );
     FOR(resolv_tile_cnt) fd_topob_vinyl_rq( topo, "resolv", i, "accdb_resolv", "resolv", 4UL, 1UL, 1UL, FD_VINYL_PERM_READ_ONLY );
-    if( rpc_enabled ) {
-      fd_topob_vinyl_rq( topo, "rpc", 0UL, "accdb_rpc", "rpc", 4UL, 1UL, 1UL, FD_VINYL_PERM_READ_ONLY );
-    }
   }
 
   for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
@@ -1814,21 +1785,6 @@ fd_topo_configure_tile( fd_topo_tile_t * tile,
     tile->gui.frontend_release_channel  = config->development.gui.frontend_release_channel_enum;
     fd_cstr_ncpy( tile->gui.wfs_bank_hash, config->firedancer.consensus.wait_for_supermajority_with_bank_hash, sizeof(tile->gui.wfs_bank_hash) );
     tile->gui.expected_shred_version = config->consensus.expected_shred_version;
-
-  } else if( FD_UNLIKELY( !strcmp( tile->name, "rpc" ) ) ) {
-
-    if( FD_UNLIKELY( !fd_cstr_to_ip4_addr( config->tiles.rpc.rpc_listen_address, &tile->rpc.listen_addr ) ) )
-      FD_LOG_ERR(( "failed to parse rpc listen address `%s`", config->tiles.rpc.rpc_listen_address ));
-    tile->rpc.listen_port = config->tiles.rpc.rpc_listen_port;
-    tile->rpc.delay_startup = config->tiles.rpc.delay_startup;
-    tile->rpc.max_http_connections      = config->tiles.rpc.max_http_connections;
-    tile->rpc.max_http_request_length   = config->tiles.rpc.max_http_request_length;
-    tile->rpc.send_buffer_size_mb       = config->tiles.rpc.send_buffer_size_mb;
-
-    tile->rpc.max_live_slots  = config->firedancer.runtime.max_live_slots;
-    tile->rpc.accdb_max_depth = config->firedancer.runtime.max_live_slots + config->firedancer.accounts.write_delay_slots;
-
-    fd_cstr_ncpy( tile->rpc.identity_key_path, config->paths.identity_key, sizeof(tile->rpc.identity_key_path) );
 
   } else if( FD_UNLIKELY( !strcmp( tile->name, "backt" ) ) ) {
 
