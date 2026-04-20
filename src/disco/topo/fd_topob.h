@@ -264,6 +264,18 @@ void
 fd_topob_plugin_dispatch( fd_topo_t *             topo,
                           fd_plugin_entry_t const * plugins );
 
+/* fd_topob_plugin_config merges plugin config into topo->props.
+   For each key-value pair in the source pod, inserts it into
+   topo->props under "plugins.<plugin_name>.<key>".  The source
+   pod should contain the parsed [plugins.<name>] TOML section.
+   Only leaf values (non-subpod) are inserted; subpods are
+   recursed into with dotted key concatenation. */
+
+void
+fd_topob_plugin_config( fd_topo_t *    topo,
+                        char const *   plugin_name,
+                        uchar const *  config_pod );
+
 FD_PROTOTYPES_END
 
 #endif /* HEADER_fd_src_disco_topo_fd_topob_h */

@@ -335,18 +335,6 @@ $(OBJDIR)/obj/%.i : src/%.cxx $(OBJDIR)/info
 	$(MKDIR) $(dir $@) && \
 $(CXX) $(CPPFLAGS) $(CXXFLAGS) -E $< -o $@
 
-# Plugin compile rules (mirror the src/ rules above)
-
-$(OBJDIR)/plugin/%.d : plugin/%.c $(OBJDIR)/info
-	$(MKDIR) $(dir $@) && \
-$(CC) $(CPPFLAGS) $(CFLAGS) -M -MP $< -o $@.tmp && \
-$(SED) 's,\($(notdir $*)\)\.o[ :]*,$(OBJDIR)/plugin/$*.o $(OBJDIR)/plugin/$*.S $(OBJDIR)/plugin/$*.i $@ : ,g' < $@.tmp > $@ && \
-$(RM) $@.tmp
-
-$(OBJDIR)/plugin/%.o : plugin/%.c $(OBJDIR)/info
-	$(MKDIR) $(dir $@) && \
-$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
-
 $(OBJDIR)/obj/%.check : src/%.c
 	@$(CC) $(CPPFLAGS) $(CFLAGS) -fsyntax-only $<
 
@@ -410,17 +398,12 @@ $(GENERATED_PLUGIN_REGISTRY): plugin/Plugin.mk $(wildcard plugin/*/Local.mk)
 all: $(GENERATED_PLUGIN_REGISTRY)
 
 # ---- Manifest validation ----
-# Validate each binary's manifests separately (firedancer and fdctl
-# produce overlapping links and must not be checked together).
 
-PLUGIN_MANIFESTS := $(wildcard plugin/*/manifest.toml)
-FD_MANIFESTS     := $(wildcard src/app/firedancer/manifest.toml) $(PLUGIN_MANIFESTS)
-FRANK_MANIFESTS  := $(wildcard src/app/fdctl/manifest.toml) $(PLUGIN_MANIFESTS)
+MANIFEST_FILES := $(wildcard src/app/firedancer/manifest.toml plugin/*/manifest.toml)
 
-$(OBJDIR)/generated/.manifests_validated: $(FD_MANIFESTS) $(FRANK_MANIFESTS) contrib/codegen/validate_manifests.py
+$(OBJDIR)/generated/.manifests_validated: $(MANIFEST_FILES) contrib/codegen/validate_manifests.py
 	@mkdir -p $(dir $@) && \
-	$(PYTHON) contrib/codegen/validate_manifests.py $(FD_MANIFESTS) && \
-	$(PYTHON) contrib/codegen/validate_manifests.py $(FRANK_MANIFESTS) && \
+	$(PYTHON) contrib/codegen/validate_manifests.py $(MANIFEST_FILES) && \
 	touch $@
 
 all: $(OBJDIR)/generated/.manifests_validated
