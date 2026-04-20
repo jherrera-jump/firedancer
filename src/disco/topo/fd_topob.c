@@ -43,6 +43,11 @@ fd_topob_wksp( fd_topo_t *  topo,
                char const * name ) {
   if( FD_UNLIKELY( !topo || !name || !strlen( name ) ) ) FD_LOG_ERR(( "NULL args" ));
   if( FD_UNLIKELY( strlen( name )>=sizeof(topo->workspaces[ topo->wksp_cnt ].name ) ) ) FD_LOG_ERR(( "wksp name too long: %s", name ));
+
+  /* Idempotent -- return existing workspace if name matches */
+  ulong existing = fd_topo_find_wksp( topo, name );
+  if( existing!=ULONG_MAX ) return &topo->workspaces[ existing ];
+
   if( FD_UNLIKELY( topo->wksp_cnt>=FD_TOPO_MAX_WKSPS ) ) FD_LOG_ERR(( "too many workspaces" ));
 
   fd_topo_wksp_t * wksp = &topo->workspaces[ topo->wksp_cnt ];
@@ -100,12 +105,27 @@ fd_topob_link( fd_topo_t *  topo,
                ulong        burst ) {
   if( FD_UNLIKELY( !topo || !link_name || !wksp_name ) ) FD_LOG_ERR(( "NULL args" ));
   if( FD_UNLIKELY( strlen( link_name )>=sizeof(topo->links[ topo->link_cnt ].name ) ) ) FD_LOG_ERR(( "link name too long: %s", link_name ));
+
+  /* Namespace prefix enforcement for plugin links */
+  if( FD_UNLIKELY( topo->namespace[0] &&
+                   strcmp( topo->namespace, "fd" ) ) ) {
+    if( FD_UNLIKELY( strncmp( link_name, topo->namespace,
+                              strlen( topo->namespace ) ) ) )
+      FD_LOG_ERR(( "plugin '%s' created link '%s' which does "
+                   "not start with namespace prefix",
+                   topo->namespace, link_name ));
+  }
+
   if( FD_UNLIKELY( topo->link_cnt>=FD_TOPO_MAX_LINKS ) ) FD_LOG_ERR(( "too many links" ));
 
   ulong kind_id = 0UL;
   for( ulong i=0UL; i<topo->link_cnt; i++ ) {
     if( !strcmp( topo->links[ i ].name, link_name ) ) kind_id++;
   }
+
+  /* Idempotent -- return existing link if (name, kind_id) match */
+  ulong existing = fd_topo_find_link( topo, link_name, kind_id );
+  if( existing!=ULONG_MAX ) return &topo->links[ existing ];
 
   fd_topo_link_t * link = &topo->links[ topo->link_cnt ];
   strncpy( link->name, link_name, sizeof(link->name) );
@@ -154,12 +174,27 @@ fd_topob_tile( fd_topo_t *  topo,
 
   if( FD_UNLIKELY( !topo || !tile_name || !tile_wksp || !metrics_wksp ) ) FD_LOG_ERR(( "NULL args" ));
   if( FD_UNLIKELY( strlen( tile_name )>=sizeof(topo->tiles[ topo->tile_cnt ].name ) ) ) FD_LOG_ERR(( "tile name too long: %s", tile_name ));
+
+  /* Namespace prefix enforcement for plugin tiles */
+  if( FD_UNLIKELY( topo->namespace[0] &&
+                   strcmp( topo->namespace, "fd" ) ) ) {
+    if( FD_UNLIKELY( strncmp( tile_name, topo->namespace,
+                              strlen( topo->namespace ) ) ) )
+      FD_LOG_ERR(( "plugin '%s' created tile '%s' which does "
+                   "not start with namespace prefix",
+                   topo->namespace, tile_name ));
+  }
+
   if( FD_UNLIKELY( topo->tile_cnt>=FD_TOPO_MAX_TILES ) ) FD_LOG_ERR(( "too many tiles %lu", topo->tile_cnt ));
 
   ulong kind_id = 0UL;
   for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
     if( !strcmp( topo->tiles[ i ].name, tile_name ) ) kind_id++;
   }
+
+  /* Idempotent -- return existing tile if (name, kind_id) match */
+  ulong existing = fd_topo_find_tile( topo, tile_name, kind_id );
+  if( existing!=ULONG_MAX ) return &topo->tiles[ existing ];
 
   fd_topo_tile_t * tile = &topo->tiles[ topo->tile_cnt ];
   strncpy( tile->name, tile_name, sizeof(tile->name) );
@@ -246,6 +281,11 @@ fd_topob_tile_out( fd_topo_t *  topo,
   ulong link_id = fd_topo_find_link( topo, link_name, link_kind_id );
   if( FD_UNLIKELY( link_id==ULONG_MAX ) ) FD_LOG_ERR(( "link not found: %s:%lu", link_name, link_kind_id ));
   fd_topo_link_t * link = &topo->links[ link_id ];
+
+  /* Idempotent -- skip if already wired */
+  for( ulong i=0UL; i<tile->out_cnt; i++ ) {
+    if( tile->out_link_id[ i ]==link->id ) return;
+  }
 
   if( FD_UNLIKELY( tile->out_cnt>=FD_TOPO_MAX_TILE_OUT_LINKS ) ) FD_LOG_ERR(( "too many out links: %s", tile_name ));
   tile->out_link_id[ tile->out_cnt ] = link->id;
@@ -748,8 +788,7 @@ void
 fd_topob_subscribe( fd_topo_t *  topo,
                     char const * consumer,      ulong consumer_cnt,
                     char const * link_name,     char const * version,
-                    int reliable, int polled,   int optional,
-                    int pass ) {
+                    int reliable, int polled,   int optional ) {
   (void)version; /* TODO: version validation in Phase 3 */
 
   /* Count existing links with this name */
@@ -761,10 +800,10 @@ fd_topob_subscribe( fd_topo_t *  topo,
 
   if( !link_instance_cnt ) {
     /* Link does not exist */
-    if( pass==1 ) return; /* Pass 1: silently skip */
+    if( topo->skip_missing_links ) return; /* silently skip */
     if( optional ) return; /* Optional: silently skip */
     FD_LOG_ERR(( "required subscribe to link '%s' failed: "
-                 "link does not exist after pass 2",
+                 "link does not exist",
                  link_name ));
   }
 
@@ -793,6 +832,36 @@ fd_topob_subscribe( fd_topo_t *  topo,
                         link_name, i, reliable, polled );
     }
   }
+}
+
+void
+fd_topob_plugin_dispatch( fd_topo_t *               topo,
+                          fd_plugin_entry_t const * plugins ) {
+  if( FD_UNLIKELY( !topo || !plugins ) ) return;
+
+  /* Pass 1: all plugins create tiles, links, and internal
+     connections.  subscribe() silently skips if the target
+     link doesn't exist yet.  connect / connect_many / publish
+     / fd_topob_wksp / fd_topob_tile execute normally. */
+  topo->skip_missing_links = 1;
+  for( ulong i=0UL; plugins[ i ].ns; i++ ) {
+    fd_cstr_ncpy( topo->namespace, plugins[ i ].ns,
+                  sizeof(topo->namespace) );
+    plugins[ i ].fn( topo );
+  }
+
+  /* Pass 2: same functions run again.  All creation calls
+     are idempotent and no-op.  subscribe(REQUIRED) now fails
+     hard if the link still doesn't exist. */
+  topo->skip_missing_links = 0;
+  for( ulong i=0UL; plugins[ i ].ns; i++ ) {
+    fd_cstr_ncpy( topo->namespace, plugins[ i ].ns,
+                  sizeof(topo->namespace) );
+    plugins[ i ].fn( topo );
+  }
+
+  /* Clear namespace after plugin dispatch */
+  topo->namespace[0] = '\0';
 }
 
 void

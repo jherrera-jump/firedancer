@@ -707,6 +707,13 @@ typedef struct {
 struct fd_topo {
   char           app_name[ 256UL ];
   uchar          props[ 32768UL ];
+  char           namespace[ 7 ]; /* Plugin namespace; set by framework
+                                    during plugin dispatch.  "fd" during
+                                    core topology construction, "" when
+                                    no namespace enforcement active. */
+  int            skip_missing_links; /* When set, fd_topob_subscribe
+                                    silently skips links that do not
+                                    exist instead of erroring. */
 
   ulong          wksp_cnt;
   ulong          link_cnt;

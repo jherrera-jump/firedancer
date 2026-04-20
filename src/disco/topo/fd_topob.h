@@ -43,6 +43,18 @@
 #define FD_TOPOB_TILE_USES_ID_KEYSWITCH (1UL<<6) /* uses identity keyswitch       */
 #define FD_TOPOB_TILE_USES_AV_KEYSWITCH (1UL<<7) /* uses authority voter keyswitch */
 
+/* Plugin topology function signature and registry entry.
+   The build system generates a registry of plugin entries;
+   fd_topob_plugin_dispatch iterates this registry in two
+   passes. */
+
+typedef void (*fd_plugin_topo_fn)( fd_topo_t * topo );
+
+typedef struct {
+  char const *      ns;
+  fd_plugin_topo_fn fn;
+} fd_plugin_entry_t;
+
 FD_PROTOTYPES_BEGIN
 
 /* Initialize a new fd_topo_t with the given app name and at the memory address
@@ -224,19 +236,33 @@ fd_topob_publish( fd_topo_t *  topo,
 
 /* fd_topob_subscribe wires consumer(s) to an existing link
    without knowing its creation parameters.  Behavior depends on
-   the framework's current pass:
+   topo->pass (set by fd_topob_plugin_dispatch):
      Pass 1: silently skips if the link doesn't exist yet.
      Pass 2: FD_LOG_ERR if the link still doesn't exist,
-             UNLESS optional -- then silently skip on both passes.
-   version is the consumer's expected semver.
-   pass should be 1 or 2, indicating which dispatch pass. */
+             UNLESS optional -- then silently skip on both
+             passes.
+   version is the consumer's expected semver. */
 
 void
 fd_topob_subscribe( fd_topo_t *  topo,
                     char const * consumer,      ulong consumer_cnt,
                     char const * link_name,     char const * version,
-                    int reliable, int polled,   int optional,
-                    int pass );
+                    int reliable, int polled,   int optional );
+
+/* fd_topob_plugin_dispatch runs the two-pass plugin dispatch
+   protocol.  For each plugin in the registry, sets
+   topo->namespace to the plugin's namespace and calls the
+   plugin's topology function.  Pass 1 allows all creation
+   calls and silently skips unresolved subscribes.  Pass 2
+   re-runs all plugins; creation calls are idempotent no-ops,
+   and required subscribes fail hard if still unresolved.
+   Clears topo->namespace after dispatch completes.
+
+   plugins is a NULL-terminated array of fd_plugin_entry_t. */
+
+void
+fd_topob_plugin_dispatch( fd_topo_t *             topo,
+                          fd_plugin_entry_t const * plugins );
 
 FD_PROTOTYPES_END
 
