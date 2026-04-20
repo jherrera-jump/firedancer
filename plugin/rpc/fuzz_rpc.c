@@ -16,14 +16,14 @@
 #include <errno.h>
 #include <sys/mman.h>
 
-#include "../../util/fd_util.h"
-#include "../../funk/fd_funk.h"
-#include "../../flamenco/accdb/fd_accdb_impl_v1.h"
-#include "../../disco/topo/fd_topob.h"
-#include "../../util/pod/fd_pod.h"
-#include "../../util/pod/fd_pod_format.h"
-#include "../../ballet/json/cJSON_alloc.h"
-#include "../../util/sanitize/fd_fuzz.h"
+#include "../../src/util/fd_util.h"
+#include "../../src/funk/fd_funk.h"
+#include "../../src/flamenco/accdb/fd_accdb_impl_v1.h"
+#include "../../src/disco/topo/fd_topob.h"
+#include "../../src/util/pod/fd_pod.h"
+#include "../../src/util/pod/fd_pod_format.h"
+#include "../../src/ballet/json/cJSON_alloc.h"
+#include "../../src/util/sanitize/fd_fuzz.h"
 
 #define FD_TILE_TEST
 #include "fd_rpc_tile.c"

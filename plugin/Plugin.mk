@@ -40,10 +40,8 @@ PLUGIN_NAMES += $(PLUGIN_NAME)
 # Record the topology function name (default: fd_$(PLUGIN_NAME)_topo)
 PLUGIN_TOPO_FN_$(PLUGIN_NAME) ?= fd_$(PLUGIN_NAME)_topo
 
-# Record tile run struct names (default: fd_tile_<basename> for each tile src)
-ifdef PLUGIN_TILE_SRCS
-PLUGIN_TILE_RUNS_$(PLUGIN_NAME) := $(foreach src,$(PLUGIN_TILE_SRCS),fd_tile_$(src))
-endif
+# Record tile run struct name (default: fd_tile_<PLUGIN_NAME>)
+PLUGIN_TILE_RUNS_$(PLUGIN_NAME) ?= fd_tile_$(PLUGIN_NAME)
 
 # Record the library name so the linker can find it
 PLUGIN_LIBS += $(_PLUGIN_LIB)
@@ -57,14 +55,5 @@ clean-plugin-$(PLUGIN_NAME)::
 
 PLUGIN_CLEAN_TARGETS += clean-plugin-$(PLUGIN_NAME)
 
-# Generate seccomp headers for any .seccomppolicy files in the
-# plugin directory.  The generate_filters.py script writes the
-# output next to the policy file (plugin/NAME/generated/).
-_PLUGIN_POLICIES := $(wildcard $(MKPATH)*.seccomppolicy)
-ifdef _PLUGIN_POLICIES
-$(foreach pol,$(_PLUGIN_POLICIES),$(shell $(PYTHON) contrib/codegen/generate_filters.py $(pol)))
-endif
-
 # Clean up local variables to avoid leaking into the next plugin
 undefine _PLUGIN_LIB
-undefine _PLUGIN_POLICIES

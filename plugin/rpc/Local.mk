@@ -2,8 +2,18 @@ PLUGIN_NAME      := rpc
 PLUGIN_TOPO_SRCS := fd_rpc_topo
 include plugin/Plugin.mk
 
-# The tile run struct fd_tile_rpc is defined in
-# src/discof/rpc/fd_rpc_tile.c and compiled into fd_discof.
-# The plugin registers the struct name but does not compile the
-# tile source itself.
-PLUGIN_TILE_RUNS_rpc := fd_tile_rpc
+# RPC tile implementation (moved from src/discof/rpc/)
+ifdef FD_HAS_ALLOCA
+ifdef FD_HAS_LZ4
+$(call add-objs,fd_rpc_tile,fd_plugin_rpc)
+$(call make-unit-test,test_rpc_tile,test_rpc_tile,fd_plugin_rpc fd_discof firedancer_version fd_disco fd_flamenco fd_waltz fd_vinyl fd_funk fd_tango fd_ballet fd_util)
+
+ifdef FD_HAS_HOSTED
+$(call make-fuzz-test,fuzz_rpc,fuzz_rpc,fd_plugin_rpc fd_discof firedancer_version fd_disco fd_tango fd_flamenco fd_vinyl fd_funk fd_waltz fd_ballet fd_util)
+
+ifdef FD_HAS_BZIP2
+$(call make-fuzz-test,fuzz_rpc_tarball,fuzz_rpc_tarball,fd_plugin_rpc fd_discof firedancer_version fd_disco fd_tango fd_flamenco fd_vinyl fd_funk fd_waltz fd_ballet fd_util)
+endif
+endif
+endif
+endif

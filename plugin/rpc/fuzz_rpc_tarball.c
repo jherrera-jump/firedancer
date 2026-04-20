@@ -14,9 +14,9 @@
 #include <errno.h>
 #include <sys/mman.h>
 
-#include "../../util/fd_util.h"
-#include "../../disco/topo/fd_topob.h"
-#include "../../util/sanitize/fd_fuzz.h"
+#include "../../src/util/fd_util.h"
+#include "../../src/disco/topo/fd_topob.h"
+#include "../../src/util/sanitize/fd_fuzz.h"
 
 #define FD_TILE_TEST
 #include "fd_rpc_tile.c"

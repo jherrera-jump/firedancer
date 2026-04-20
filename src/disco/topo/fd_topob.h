@@ -276,6 +276,17 @@ fd_topob_plugin_config( fd_topo_t *    topo,
                         char const *   plugin_name,
                         uchar const *  config_pod );
 
+/* fd_topob_tile_uses_obj looks up a shared object by its
+   props key (e.g., "funk", "funk_locks") and wires the tile
+   to use it.  No-ops if the key is absent from topo->props.
+   Returns 1 if the object was found and wired, 0 otherwise. */
+
+int
+fd_topob_tile_uses_obj( fd_topo_t *      topo,
+                        fd_topo_tile_t * tile,
+                        char const *     props_key,
+                        int              mode );
+
 FD_PROTOTYPES_END
 
 #endif /* HEADER_fd_src_disco_topo_fd_topob_h */

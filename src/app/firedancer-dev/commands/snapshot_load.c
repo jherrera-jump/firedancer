@@ -72,15 +72,15 @@ snapshot_load_topo( config_t * config ) {
 
   /* read() tile */
   fd_topob_wksp( topo, "snapct" );
-  fd_topo_tile_t * snapct_tile = fd_topob_tile( topo, "snapct", "snapct", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+  fd_topob_tile( topo, "snapct", "snapct", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
 
   /* load tile */
   fd_topob_wksp( topo, "snapld" );
-  fd_topo_tile_t * snapld_tile = fd_topob_tile( topo, "snapld", "snapld", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+  fd_topob_tile( topo, "snapld", "snapld", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
 
   /* "snapdc": Zstandard decompress tile */
   fd_topob_wksp( topo, "snapdc" );
-  fd_topo_tile_t * snapdc_tile = fd_topob_tile( topo, "snapdc", "snapdc", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+  fd_topob_tile( topo, "snapdc", "snapdc", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
 
   /* "snapin": Snapshot parser tile */
   fd_topob_wksp( topo, "snapin" );
@@ -91,10 +91,10 @@ snapshot_load_topo( config_t * config ) {
   if( vinyl_enabled ) {
 
     fd_topob_wksp( topo, "snapwm" );
-    fd_topo_tile_t * snapwm_tile = fd_topob_tile( topo, "snapwm", "snapwm", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+    fd_topob_tile( topo, "snapwm", "snapwm", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
 
     fd_topob_wksp( topo, "snapwh" );
-    fd_topo_tile_t * snapwh_tile = fd_topob_tile( topo, "snapwh", "snapwh", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+    fd_topob_tile( topo, "snapwh", "snapwh", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
 
     fd_topob_wksp( topo, "snapwr" );
     FOR(snapwr_tile_cnt) fd_topob_tile( topo, "snapwr", "snapwr", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_FLOATING );

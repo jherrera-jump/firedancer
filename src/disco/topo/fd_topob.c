@@ -116,6 +116,9 @@ fd_topob_link( fd_topo_t *  topo,
                    topo->namespace, link_name ));
   }
 
+  /* Auto-create workspace if it doesn't exist */
+  fd_topob_wksp( topo, wksp_name );
+
   if( FD_UNLIKELY( topo->link_cnt>=FD_TOPO_MAX_LINKS ) ) FD_LOG_ERR(( "too many links" ));
 
   ulong kind_id = 0UL;
@@ -185,6 +188,10 @@ fd_topob_tile( fd_topo_t *  topo,
                    "not start with namespace prefix",
                    topo->namespace, tile_name ));
   }
+
+  /* Auto-create workspaces if they don't exist */
+  fd_topob_wksp( topo, tile_wksp );
+  fd_topob_wksp( topo, metrics_wksp );
 
   if( FD_UNLIKELY( topo->tile_cnt>=FD_TOPO_MAX_TILES ) ) FD_LOG_ERR(( "too many tiles %lu", topo->tile_cnt ));
 
@@ -896,6 +903,17 @@ fd_topob_plugin_config( fd_topo_t *    topo,
     FD_LOG_ERR(( "plugin name too long: %s", plugin_name ));
 
   FD_TEST( fd_pod_insert_subpod( topo->props, path, config_pod ) );
+}
+
+int
+fd_topob_tile_uses_obj( fd_topo_t *      topo,
+                        fd_topo_tile_t * tile,
+                        char const *     props_key,
+                        int              mode ) {
+  ulong obj_id = fd_pod_query_ulong( topo->props, props_key, ULONG_MAX );
+  if( FD_UNLIKELY( obj_id==ULONG_MAX ) ) return 0;
+  fd_topob_tile_uses( topo, tile, &topo->objs[ obj_id ], mode );
+  return 1;
 }
 
 void

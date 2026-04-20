@@ -1,9 +1,9 @@
 #define _GNU_SOURCE
 #include "fd_rpc_tile.c"
-#include "../../funk/fd_funk.h"
-#include "../../disco/topo/fd_topob.h"
-#include "../../waltz/http/fd_http_server_private.h"
-#include "../../util/pod/fd_pod.h"
+#include "../../src/funk/fd_funk.h"
+#include "../../src/disco/topo/fd_topob.h"
+#include "../../src/waltz/http/fd_http_server_private.h"
+#include "../../src/util/pod/fd_pod.h"
 #include <errno.h>
 #include <sys/mman.h>
 

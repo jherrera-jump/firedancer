@@ -1,22 +1,22 @@
-#include "../replay/fd_replay_tile.h"
-#include "../genesis/fd_genesi_tile.h"
-#include "../fd_accdb_topo.h"
+#include "../../src/discof/replay/fd_replay_tile.h"
+#include "../../src/discof/genesis/fd_genesi_tile.h"
+#include "../../src/discof/fd_accdb_topo.h"
 
-#include "../../ballet/json/cJSON_alloc.h"
-#include "../../ballet/base64/fd_base64.h"
-#include "../../ballet/json/cJSON.h"
-#include "../../disco/topo/fd_topo.h"
-#include "../../disco/keyguard/fd_keyload.h"
-#include "../../disco/keyguard/fd_keyswitch.h"
-#include "../../flamenco/accdb/fd_accdb_sync.h"
-#include "../../flamenco/features/fd_features.h"
-#include "../../flamenco/runtime/sysvar/fd_sysvar_rent.h"
-#include "../../flamenco/runtime/fd_runtime_const.h"
-#include "../../flamenco/gossip/fd_gossip_message.h"
-#include "../../flamenco/genesis/fd_genesis_parse.h"
-#include "../../util/net/fd_ip4.h"
-#include "../../waltz/http/fd_http_server.h"
-#include "../../waltz/http/fd_http_server_private.h"
+#include "../../src/ballet/json/cJSON_alloc.h"
+#include "../../src/ballet/base64/fd_base64.h"
+#include "../../src/ballet/json/cJSON.h"
+#include "../../src/disco/topo/fd_topo.h"
+#include "../../src/disco/keyguard/fd_keyload.h"
+#include "../../src/disco/keyguard/fd_keyswitch.h"
+#include "../../src/flamenco/accdb/fd_accdb_sync.h"
+#include "../../src/flamenco/features/fd_features.h"
+#include "../../src/flamenco/runtime/sysvar/fd_sysvar_rent.h"
+#include "../../src/flamenco/runtime/fd_runtime_const.h"
+#include "../../src/flamenco/gossip/fd_gossip_message.h"
+#include "../../src/flamenco/genesis/fd_genesis_parse.h"
+#include "../../src/util/net/fd_ip4.h"
+#include "../../src/waltz/http/fd_http_server.h"
+#include "../../src/waltz/http/fd_http_server_private.h"
 
 #include <stddef.h>
 #include <sys/socket.h>
@@ -27,7 +27,7 @@
 #endif
 
 #if FD_HAS_BZIP2
-#include "../../util/archive/fd_tar.h"
+#include "../../src/util/archive/fd_tar.h"
 #include <bzlib.h>
 #endif
 
@@ -217,7 +217,7 @@ typedef struct fd_rpc_cluster_node fd_rpc_cluster_node_t;
 #define DLIST_ELE_T fd_rpc_cluster_node_t
 #define DLIST_PREV dlist.prev
 #define DLIST_NEXT dlist.next
-#include "../../util/tmpl/fd_dlist.c"
+#include "../../src/util/tmpl/fd_dlist.c"
 
 struct fd_rpc_tile {
   int delay_startup;
@@ -2068,7 +2068,7 @@ rlimit_file_cnt( fd_topo_t const *      topo FD_PARAM_UNUSED,
 #define STEM_CALLBACK_BEFORE_FRAG         before_frag
 #define STEM_CALLBACK_RETURNABLE_FRAG     returnable_frag
 
-#include "../../disco/stem/fd_stem.c"
+#include "../../src/disco/stem/fd_stem.c"
 
 #ifndef FD_TILE_TEST
 fd_topo_run_tile_t fd_tile_rpc = {
