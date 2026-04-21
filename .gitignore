@@ -85,4 +85,4 @@ venv
 .codex
 
 # Plugin generated files
-plugin/*/generated/
+plugin/**/generated/

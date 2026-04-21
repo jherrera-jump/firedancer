@@ -10,7 +10,7 @@ OBJDIR:=$(BASEDIR)/$(BUILDDIR)
 #
 # Use ?= so that users can (optionally) perform partial compilation in special
 # circumstances.
-LOCAL_MKS?=$(shell $(FIND) -L src plugin -type f -name Local.mk 2>/dev/null)
+LOCAL_MKS?=$(shell $(FIND) -L plugin src -type f -name Local.mk 2>/dev/null)
 
 CPPFLAGS+=-DFD_BUILD_INFO=\"$(OBJDIR)/info\"
 CPPFLAGS+=$(EXTRA_CPPFLAGS)
@@ -386,7 +386,7 @@ $(foreach mk,$(LOCAL_MKS),$(eval $(call _include-mk,$(mk))))
 # ---- Plugin registry generation ----
 # Generate fd_plugin_registry.h from accumulated plugin metadata.
 
-GENERATED_PLUGIN_REGISTRY := $(OBJDIR)/generated/fd_plugin_registry.h
+GENERATED_PLUGIN_REGISTRY := plugin/generated/fd_plugin_registry.h
 
 $(GENERATED_PLUGIN_REGISTRY): plugin/Plugin.mk $(wildcard plugin/*/Local.mk)
 	@mkdir -p $(dir $@) && { \
@@ -396,11 +396,10 @@ $(GENERATED_PLUGIN_REGISTRY): plugin/Plugin.mk $(wildcard plugin/*/Local.mk)
 	echo '#include "../../src/disco/topo/fd_topob.h"'; \
 	$(foreach n,$(PLUGIN_NAMES),$(foreach t,$(PLUGIN_TILE_RUNS_$(n)),echo 'extern fd_topo_run_tile_t $(t);';)) \
 	$(foreach n,$(PLUGIN_NAMES),echo 'extern void $(or $(PLUGIN_TOPO_FN_$(n)),fd_$(n)_topo)( fd_topo_t * topo );';) \
-	echo 'static fd_topo_run_tile_t * PLUGIN_TILES[] = {'; \
-	$(foreach n,$(PLUGIN_NAMES),$(foreach t,$(PLUGIN_TILE_RUNS_$(n)),echo '  &$(t),';)) \
-	echo '  NULL,'; \
-	echo '};'; \
-	echo 'static fd_plugin_entry_t PLUGIN_TOPOS[] = {'; \
+	echo '#define PLUGIN_TILE_LIST \'; \
+	$(foreach n,$(PLUGIN_NAMES),$(foreach t,$(PLUGIN_TILE_RUNS_$(n)),echo '  &$(t), \';)) \
+	echo ''; \
+	echo 'fd_plugin_entry_t PLUGIN_TOPOS[] = {'; \
 	$(foreach n,$(PLUGIN_NAMES),echo '  { "$(n)", $(or $(PLUGIN_TOPO_FN_$(n)),fd_$(n)_topo) },';) \
 	echo '  { NULL, NULL },'; \
 	echo '};'; \
@@ -408,6 +407,12 @@ $(GENERATED_PLUGIN_REGISTRY): plugin/Plugin.mk $(wildcard plugin/*/Local.mk)
 	} > $@
 
 all: $(GENERATED_PLUGIN_REGISTRY)
+
+# Ensure plugin registry is generated before files that include it
+$(OBJDIR)/obj/app/firedancer/main.o: $(GENERATED_PLUGIN_REGISTRY)
+$(OBJDIR)/obj/app/firedancer/main.d: $(GENERATED_PLUGIN_REGISTRY)
+$(OBJDIR)/obj/app/firedancer-dev/main.o: $(GENERATED_PLUGIN_REGISTRY)
+$(OBJDIR)/obj/app/firedancer-dev/main.d: $(GENERATED_PLUGIN_REGISTRY)
 
 # ---- Manifest validation ----
 

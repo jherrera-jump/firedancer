@@ -487,7 +487,8 @@ scratch_align( void ) {
   return 128UL;
 }
 FD_FN_PURE static inline ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const * topo FD_PARAM_UNUSED,
+                   fd_topo_tile_t const * tile ) {
   ulong chain_cnt = fd_block_id_map_chain_cnt_est( tile->replay.max_live_slots );
 
   ulong l = FD_LAYOUT_INIT;
@@ -3107,8 +3108,8 @@ unprivileged_init( fd_topo_t *      topo,
   fd_precompiles();
 
   ulong scratch_top = FD_SCRATCH_ALLOC_FINI( l, 1UL );
-  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( tile ) ) )
-    FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( tile ), scratch_top, (ulong)scratch + scratch_footprint( tile ) ));
+  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( topo, tile ) ) )
+    FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( topo, tile ), scratch_top, (ulong)scratch + scratch_footprint( topo, tile ) ));
 }
 
 static ulong

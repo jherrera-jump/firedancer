@@ -46,15 +46,16 @@ udpecho_topo( config_t * config ) {
   /* Reset topology from scratch */
   fd_topo_t * topo = &config->topo;
   fd_topob_new( &config->topo, config->name );
+  fd_memcpy( topo->config, config->config_pod, sizeof(topo->config) );
   topo->max_page_size = fd_cstr_to_shmem_page_sz( config->hugetlbfs.max_page_size );
 
   fd_topob_wksp( topo, "metric" );
   fd_topob_wksp( topo, "metric_in" );
   fd_topos_net_tiles( topo, config->layout.net_tile_count, &config->net, config->tiles.netlink.max_routes, config->tiles.netlink.max_peer_routes, config->tiles.netlink.max_neighbors, 0 );
-  fd_topob_tile( topo, "metric",  "metric", "metric_in", FD_TOPOB_TILE_FLOATING );
+  fd_topob_tile( topo, "metric", 0UL, "metric", "metric_in", FD_TOPOB_TILE_FLOATING );
 
   fd_topob_wksp( topo, "l4swap" );
-  fd_topob_tile( topo, "l4swap", "l4swap", "l4swap", 0UL );
+  fd_topob_tile( topo, "l4swap", 0UL, "l4swap", "l4swap", 0UL );
 
   fd_topob_link( topo, "quic_net", "l4swap", 2048UL, FD_NET_MTU, 1UL );
   fd_topob_tile_out( topo, "l4swap", 0UL, "quic_net", 0UL );

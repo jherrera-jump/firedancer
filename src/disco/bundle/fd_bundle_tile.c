@@ -36,7 +36,8 @@ scratch_align( void ) {
 }
 
 FD_FN_CONST static ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const * topo, fd_topo_tile_t const * tile ) {
+  (void)topo;
   ulong pending_max = tile->bundle.out_depth;
   ulong l = FD_LAYOUT_INIT;
   l = FD_LAYOUT_APPEND( l, alignof(fd_bundle_tile_t), sizeof(fd_bundle_tile_t)                        );
@@ -327,7 +328,7 @@ privileged_init( fd_topo_t *      topo,
   if( FD_UNLIKELY( (ulong)ctx != (ulong)scratch ) ) {
     FD_LOG_CRIT(( "Invalid bundle tile scratch alignment" )); /* unreachable */
   }
-  if( FD_UNLIKELY( scratch_end - (ulong)scratch > scratch_footprint( tile ) ) ) {
+  if( FD_UNLIKELY( scratch_end - (ulong)scratch > scratch_footprint( topo, tile ) ) ) {
     FD_LOG_CRIT(( "Bundle tile scratch overflow" )); /* unreachable */
   }
 

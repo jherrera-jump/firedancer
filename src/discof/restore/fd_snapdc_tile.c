@@ -61,7 +61,8 @@ scratch_align( void ) {
 }
 
 FD_FN_PURE static ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const * topo FD_PARAM_UNUSED,
+                   fd_topo_tile_t const * tile ) {
   (void)tile;
   ulong l = FD_LAYOUT_INIT;
   l = FD_LAYOUT_APPEND( l, alignof(fd_snapdc_tile_t), sizeof(fd_snapdc_tile_t)                   );
@@ -358,11 +359,11 @@ unprivileged_init( fd_topo_t *      topo,
   ctx->in.mtu                    = in_link->mtu;
 
   ulong scratch_top = FD_SCRATCH_ALLOC_FINI( l, 1UL );
-  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( tile ) ) )
+  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( topo, tile ) ) )
     FD_LOG_ERR(( "scratch overflow %lu %lu %lu",
-                 scratch_top - (ulong)scratch - scratch_footprint( tile ),
+                 scratch_top - (ulong)scratch - scratch_footprint( topo, tile ),
                  scratch_top,
-                 (ulong)scratch + scratch_footprint( tile ) ));
+                 (ulong)scratch + scratch_footprint( topo, tile ) ));
 }
 
 /* handle_data_frag can publish one data frag plus an error frag */

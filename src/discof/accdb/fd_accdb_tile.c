@@ -196,7 +196,8 @@ fd_accdb_tile_layout( fd_accdb_tile_layout_t * layout,
 }
 
 static ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const * topo FD_PARAM_UNUSED,
+                   fd_topo_tile_t const * tile ) {
   fd_accdb_tile_layout_t layout[1];
   fd_accdb_tile_layout( layout, tile );
   return layout->footprint;

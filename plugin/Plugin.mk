@@ -44,7 +44,7 @@ PLUGIN_TOPO_FN_$(PLUGIN_NAME) ?= fd_$(PLUGIN_NAME)_topo
 PLUGIN_TILE_RUNS_$(PLUGIN_NAME) ?= fd_tile_$(PLUGIN_NAME)
 
 # Record the library name so the linker can find it
-PLUGIN_LIBS += $(_PLUGIN_LIB)
+PLUGIN_LIBS := $(PLUGIN_LIBS) $(_PLUGIN_LIB)
 
 # Default clean target for this plugin (removes generated/).
 # A plugin's Local.mk may override clean-plugin-NAME before or

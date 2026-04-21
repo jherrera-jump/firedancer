@@ -115,7 +115,9 @@ scratch_align( void ) {
 }
 
 static ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const * topo,
+                   fd_topo_tile_t const * tile ) {
+  (void)topo;
   (void)tile;
   ulong l = FD_LAYOUT_INIT;
   l = FD_LAYOUT_APPEND( l, alignof(fd_snaplv_t), sizeof(fd_snaplv_t) );

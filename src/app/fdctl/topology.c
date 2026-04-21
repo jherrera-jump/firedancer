@@ -44,6 +44,7 @@ fd_topo_initialize( config_t * config ) {
   ulong shred_tile_cnt  = config->layout.shred_tile_count;
 
   fd_topo_t * topo = { fd_topob_new( &config->topo, config->name ) };
+  fd_memcpy( topo->config, config->config_pod, sizeof(topo->config) );
   topo->max_page_size = fd_cstr_to_shmem_page_sz( config->hugetlbfs.max_page_size );
   topo->gigantic_page_threshold = config->hugetlbfs.gigantic_page_threshold_mib << 20;
 
@@ -146,18 +147,18 @@ fd_topo_initialize( config_t * config ) {
   FOR(net_tile_cnt) fd_topos_net_rx_link( topo, "net_shred", i, config->net.ingress_buffer_size );
 
   /*                                  topo, tile_name, tile_wksp, metrics_wksp, flags */
-  FOR(quic_tile_cnt)   fd_topob_tile( topo, "quic",    "quic",    "metric_in",  0UL );
-  FOR(verify_tile_cnt) fd_topob_tile( topo, "verify",  "verify",  "metric_in",  0UL );
-  /**/                 fd_topob_tile( topo, "dedup",   "dedup",   "metric_in",  0UL );
-  FOR(resolh_tile_cnt) fd_topob_tile( topo, "resolh",  "resolh",  "metric_in",  FD_TOPOB_TILE_IS_AGAVE );
-  /**/                 fd_topob_tile( topo, "pack",    "pack",    "metric_in",  FD_TOPOB_TILE_CRITICAL | (config->tiles.bundle.enabled ? FD_TOPOB_TILE_USES_ID_KEYSWITCH : 0UL) );
-  FOR(bank_tile_cnt)   fd_topob_tile( topo, "bank",    "bank",    "metric_in",  FD_TOPOB_TILE_IS_AGAVE );
-  /**/                 fd_topob_tile( topo, "pohh",    "pohh",    "metric_in",  FD_TOPOB_TILE_IS_AGAVE | FD_TOPOB_TILE_USES_ID_KEYSWITCH | FD_TOPOB_TILE_CRITICAL );
-  FOR(shred_tile_cnt)  fd_topob_tile( topo, "shred",   "shred",   "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH );
-  /**/                 fd_topob_tile( topo, "store",   "store",   "metric_in",  FD_TOPOB_TILE_IS_AGAVE );
-  /**/                 fd_topob_tile( topo, "sign",    "sign",    "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH );
-  /**/                 fd_topob_tile( topo, "metric",  "metric",  "metric_in",  FD_TOPOB_TILE_FLOATING );
-  /**/                 fd_topob_tile( topo, "diag",    "diag",    "metric_in",  FD_TOPOB_TILE_FLOATING );
+  FOR(quic_tile_cnt)   fd_topob_tile( topo, "quic",    i,   "quic",    "metric_in",  0UL );
+  FOR(verify_tile_cnt) fd_topob_tile( topo, "verify",  i,   "verify",  "metric_in",  0UL );
+  /**/                 fd_topob_tile( topo, "dedup",   0UL, "dedup",   "metric_in",  0UL );
+  FOR(resolh_tile_cnt) fd_topob_tile( topo, "resolh",  i,   "resolh",  "metric_in",  FD_TOPOB_TILE_IS_AGAVE );
+  /**/                 fd_topob_tile( topo, "pack",    0UL, "pack",    "metric_in",  FD_TOPOB_TILE_CRITICAL | (config->tiles.bundle.enabled ? FD_TOPOB_TILE_USES_ID_KEYSWITCH : 0UL) );
+  FOR(bank_tile_cnt)   fd_topob_tile( topo, "bank",    i,   "bank",    "metric_in",  FD_TOPOB_TILE_IS_AGAVE );
+  /**/                 fd_topob_tile( topo, "pohh",    0UL, "pohh",    "metric_in",  FD_TOPOB_TILE_IS_AGAVE | FD_TOPOB_TILE_USES_ID_KEYSWITCH | FD_TOPOB_TILE_CRITICAL );
+  FOR(shred_tile_cnt)  fd_topob_tile( topo, "shred",   i,   "shred",   "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH );
+  /**/                 fd_topob_tile( topo, "store",   0UL, "store",   "metric_in",  FD_TOPOB_TILE_IS_AGAVE );
+  /**/                 fd_topob_tile( topo, "sign",    0UL, "sign",    "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH );
+  /**/                 fd_topob_tile( topo, "metric",  0UL, "metric",  "metric_in",  FD_TOPOB_TILE_FLOATING );
+  /**/                 fd_topob_tile( topo, "diag",    0UL, "diag",    "metric_in",  FD_TOPOB_TILE_FLOATING );
 
   /*                                      topo, tile_name, tile_kind_id, fseq_wksp,   link_name,      link_kind_id, reliable,            polled */
   for( ulong j=0UL; j<quic_tile_cnt; j++ )
@@ -255,7 +256,7 @@ fd_topo_initialize( config_t * config ) {
     /**/                 fd_topob_link( topo, "votel_plugin", "plugin_in",    128UL,                                    8UL,                          1UL  );
     /**/                 fd_topob_link( topo, "valcfg_plugi", "plugin_in",    128UL,                                    608UL,                        1UL  );
 
-    /**/                 fd_topob_tile( topo, "plugin",  "plugin",  "metric_in",  0UL );
+    /**/                 fd_topob_tile( topo, "plugin",  0UL, "plugin",  "metric_in",  0UL );
 
     /**/                 fd_topob_tile_out( topo, "pohh",   0UL,                        "replay_plugi", 0UL                                                );
     /**/                 fd_topob_tile_out( topo, "pohh",   0UL,                        "gossip_plugi", 0UL                                                );
@@ -276,7 +277,7 @@ fd_topo_initialize( config_t * config ) {
 
   if( FD_LIKELY( config->tiles.gui.enabled ) ) {
     fd_topob_wksp( topo, "gui"          );
-    /**/                 fd_topob_tile( topo, "gui",     "gui",     "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH | FD_TOPOB_TILE_CRITICAL );
+    /**/                 fd_topob_tile( topo, "gui",     0UL, "gui",     "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH | FD_TOPOB_TILE_CRITICAL );
     /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "plugin_out",   0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
     /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "pohh_pack",    0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
     /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "pack_bank",    0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
@@ -298,7 +299,7 @@ fd_topo_initialize( config_t * config ) {
     /**/                 fd_topob_link( topo, "pack_sign",    "pack_sign",    65536UL,                                  1232UL,                    1UL );
     /**/                 fd_topob_link( topo, "sign_pack",    "sign_pack",    128UL,                                    64UL,                      1UL );
 
-    /**/                 fd_topob_tile( topo, "bundle",  "bundle",  "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH );
+    /**/                 fd_topob_tile( topo, "bundle",  0UL, "bundle",  "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH );
 
     /**/                 fd_topob_tile_out( topo, "bundle", 0UL, "bundle_verif", 0UL );
     FOR(verify_tile_cnt) fd_topob_tile_in(  topo, "verify", i,             "metric_in", "bundle_verif",   0UL,        FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED   );
@@ -571,6 +572,7 @@ fd_topo_configure_tile( fd_topo_tile_t * tile,
   } else if( FD_UNLIKELY( !strcmp( tile->name, "plugin" ) ) ) {
 
   } else {
-    FD_LOG_ERR(( "unknown tile name %lu `%s`", tile->id, tile->name ));
+    /* Plugin tiles are configured by their topo functions —
+       skip unknown tile names instead of erroring. */
   }
 }

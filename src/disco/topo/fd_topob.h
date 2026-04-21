@@ -130,6 +130,7 @@ fd_topob_link( fd_topo_t *  topo,
 fd_topo_tile_t *
 fd_topob_tile( fd_topo_t *  topo,
                char const * tile_name,
+               ulong        kind_id,
                char const * tile_wksp,
                char const * metrics_wksp,
                ulong        flags );

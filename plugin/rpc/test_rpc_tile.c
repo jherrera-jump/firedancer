@@ -147,17 +147,26 @@ main( int     argc,
   fd_topo_link_t * link_rpc_replay = create_link( topo, wksp, "rpc_replay", 4UL, 0UL, 1UL );
   (void)link_rpc_replay;
 
-  fd_topo_tile_t * tile     = fd_topob_tile( topo, "rpc", "wksp", "wksp", 0UL );
+  fd_topo_tile_t * tile     = fd_topob_tile( topo, "rpc", 0UL, "wksp", "wksp", 0UL );
   fd_topo_obj_t *  tile_obj = &topo->objs[ tile->tile_obj_id ];
   strcpy( tile->name, "rpc" );
-  tile->rpc.max_live_slots = 16UL;
-  tile->rpc.send_buffer_size_mb = 64UL;
   tile->id_keyswitch_obj_id = keyswitch_obj->id;
+
+  /* Populate config pod with RPC test values */
+  FD_TEST( fd_pod_insert_long( topo->config, "plugins.rpc.max_http_connections", 1024L ) );
+  FD_TEST( fd_pod_insert_long( topo->config, "plugins.rpc.send_buffer_size_mb", 64L ) );
+  FD_TEST( fd_pod_insert_long( topo->config, "plugins.rpc.max_http_request_length", 8192L ) );
+  FD_TEST( fd_pod_insert_int(  topo->config, "plugins.rpc.delay_startup", 0 ) );
+  FD_TEST( fd_pod_insert_long( topo->config, "runtime.max_live_slots", 16L ) );
+  FD_TEST( fd_pod_insert_long( topo->config, "accounts.write_delay_slots", 0L ) );
+  FD_TEST( fd_pod_insert_cstr( topo->config, "plugins.rpc.rpc_listen_address", "127.0.0.1" ) );
+  FD_TEST( fd_pod_insert_long( topo->config, "plugins.rpc.rpc_listen_port", 8899L ) );
+  FD_TEST( fd_pod_insert_cstr(  topo->config, "paths.identity_key", "" ) );
 
   fd_topob_tile_out( topo, "rpc", 0UL, "rpc_replay", 0UL );
 
-  void * scratch = fd_wksp_alloc_laddr( wksp, scratch_align(), scratch_footprint( tile ), 1UL );
-  fd_http_server_params_t http_params = derive_http_params( tile );
+  void * scratch = fd_wksp_alloc_laddr( wksp, scratch_align(), scratch_footprint( topo, tile ), 1UL );
+  fd_http_server_params_t http_params = derive_http_params( topo );
   FD_SCRATCH_ALLOC_INIT( l, scratch );
   fd_rpc_tile_t * ctx      = FD_SCRATCH_ALLOC_APPEND( l, alignof( fd_rpc_tile_t ), sizeof( fd_rpc_tile_t ) );
   void *          http_mem = FD_SCRATCH_ALLOC_APPEND( l, fd_http_server_align(),   fd_http_server_footprint( http_params ) );

@@ -29,7 +29,7 @@ fd_core_subtopo( config_t * config ) {
 
   fd_topob_wksp( topo, "metric" );
   fd_topob_wksp( topo, "metric_in" );
-  fd_topo_tile_t * metric_tile = fd_topob_tile( topo, "metric", "metric", "metric_in", FD_TOPOB_TILE_FLOATING );
+  fd_topo_tile_t * metric_tile = fd_topob_tile( topo, "metric", 0UL, "metric", "metric_in", FD_TOPOB_TILE_FLOATING );
   if( FD_UNLIKELY( !fd_cstr_to_ip4_addr( config->tiles.metric.prometheus_listen_address, &metric_tile->metric.prometheus_listen_addr ) ) )
     FD_LOG_ERR(( "failed to parse prometheus listen address `%s`", config->tiles.metric.prometheus_listen_address ));
   metric_tile->metric.prometheus_listen_port = config->tiles.metric.prometheus_listen_port;
@@ -46,7 +46,7 @@ fd_core_subtopo( config_t * config ) {
 
   fd_topob_wksp( topo, "sign" );
   for( ulong i=0UL; i<sign_tile_cnt; i++ ) {
-    fd_topo_tile_t * sign_tile = fd_topob_tile( topo, "sign", "sign", "metric_in", FD_TOPOB_TILE_USES_ID_KEYSWITCH );
+    fd_topo_tile_t * sign_tile = fd_topob_tile( topo, "sign", i, "sign", "metric_in", FD_TOPOB_TILE_USES_ID_KEYSWITCH );
     fd_cstr_ncpy( sign_tile->sign.identity_key_path, config->paths.identity_key, sizeof(sign_tile->sign.identity_key_path) );
   }
 }

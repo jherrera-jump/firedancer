@@ -84,7 +84,7 @@ scratch_align( void ) {
 }
 
 FD_FN_PURE static inline ulong
-scratch_footprint( fd_topo_tile_t const * tile FD_PARAM_UNUSED ) {
+scratch_footprint( fd_topo_t const * topo FD_PARAM_UNUSED, fd_topo_tile_t const * tile FD_PARAM_UNUSED ) {
   ulong l = FD_LAYOUT_INIT;
   l = FD_LAYOUT_APPEND( l, alignof(fd_sock_tile_t),     sizeof(fd_sock_tile_t)                );
   l = FD_LAYOUT_APPEND( l, alignof(struct iovec),       STEM_BURST*sizeof(struct iovec)       );

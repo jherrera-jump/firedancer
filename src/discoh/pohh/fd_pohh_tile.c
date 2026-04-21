@@ -1429,7 +1429,9 @@ scratch_align( void ) {
 }
 
 FD_FN_PURE static inline ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const *      topo,
+                   fd_topo_tile_t const * tile ) {
+  (void)topo;
   (void)tile;
   ulong l = FD_LAYOUT_INIT;
   l = FD_LAYOUT_APPEND( l, alignof( fd_pohh_tile_t ), sizeof( fd_pohh_tile_t ) );
@@ -2434,8 +2436,8 @@ unprivileged_init( fd_topo_t *      topo,
     ctx->features_activation->slots[i] = FD_SHRED_FEATURES_ACTIVATION_SLOT_DISABLED;
 
   ulong scratch_top = FD_SCRATCH_ALLOC_FINI( l, 1UL );
-  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( tile ) ) )
-    FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( tile ), scratch_top, (ulong)scratch + scratch_footprint( tile ) ));
+  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( topo, tile ) ) )
+    FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( topo, tile ), scratch_top, (ulong)scratch + scratch_footprint( topo, tile ) ));
 }
 
 /* One tick, one microblock, one plugin slot end, one plugin slot start,

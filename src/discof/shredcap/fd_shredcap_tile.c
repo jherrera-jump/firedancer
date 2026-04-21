@@ -203,7 +203,8 @@ populate_allowed_seccomp( fd_topo_t const *      topo FD_PARAM_UNUSED,
 }
 
 FD_FN_PURE static inline ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const * topo, fd_topo_tile_t const * tile ) {
+  (void)topo;
   (void)tile;
   ulong l = FD_LAYOUT_INIT;
   l = FD_LAYOUT_APPEND( l, alignof(fd_capture_tile_ctx_t),  sizeof(fd_capture_tile_ctx_t) );

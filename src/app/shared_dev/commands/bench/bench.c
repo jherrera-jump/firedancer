@@ -8,6 +8,7 @@
 #include "../../../../disco/topo/fd_cpu_topo.h"
 #include "../../../../disco/net/fd_net_tile.h"
 #include "../../../../util/tile/fd_tile_private.h"
+#include "../../../../util/pod/fd_pod.h"
 
 #include <errno.h>
 #include <unistd.h>
@@ -85,18 +86,18 @@ add_bench_topo( fd_topo_t  * topo,
                        "in the [development.bench.affinity] provides for %lu cores. The extra cores will be unused.",
                        benchg_tile_cnt+1UL+benchs_tile_cnt, affinity_tile_cnt ));
   }
-  fd_topo_tile_t * bencho = fd_topob_tile( topo, "bencho", "bench", "bench", FD_TOPOB_TILE_FLOATING );
+  fd_topo_tile_t * bencho = fd_topob_tile( topo, "bencho", 0UL, "bench", "bench", FD_TOPOB_TILE_FLOATING );
   bencho->bencho.rpc_port    = rpc_port;
   bencho->bencho.rpc_ip_addr = rpc_ip_addr;
   for( ulong i=0UL; i<benchg_tile_cnt; i++ ) {
-    fd_topo_tile_t * benchg = fd_topob_tile( topo, "benchg", "bench", "bench", 0UL );
+    fd_topo_tile_t * benchg = fd_topob_tile( topo, "benchg", i, "bench", "bench", 0UL );
     benchg->benchg.accounts_cnt        = accounts_cnt;
     benchg->benchg.mode                = transaction_mode;
     benchg->benchg.contending_fraction = contending_fraction;
     benchg->benchg.cu_price_spread     = cu_price_spread;
   }
   for( ulong i=0UL; i<benchs_tile_cnt; i++ ) {
-    fd_topo_tile_t * benchs = fd_topob_tile( topo, "benchs", "bench", "bench", 0UL );
+    fd_topo_tile_t * benchs = fd_topob_tile( topo, "benchs", i, "bench", "bench", 0UL );
     benchs->benchs.send_to_ip_addr = send_to_ip_addr;
     benchs->benchs.send_to_port    = send_to_port;
     benchs->benchs.conn_cnt        = conn_cnt;
@@ -133,10 +134,12 @@ bench_topo( config_t * config ) {
     rpc_port = config->frankendancer.rpc.port;
     rpc_ip_addr = config->net.ip_addr;
   } else {
-    if( FD_UNLIKELY( !config->tiles.rpc.enabled ) ) FD_LOG_ERR(( "RPC tile must be enabled to run bench" ));
-    rpc_port = config->tiles.rpc.rpc_listen_port;
-    if( FD_UNLIKELY( !fd_cstr_to_ip4_addr( config->tiles.rpc.rpc_listen_address, &rpc_ip_addr ) ) )
-      FD_LOG_ERR(( "failed to parse rpc listen address `%s`", config->tiles.rpc.rpc_listen_address ));
+    int rpc_enabled = fd_pod_query_int( config->topo.config, "plugins.rpc.enabled", 0 );
+    if( FD_UNLIKELY( !rpc_enabled ) ) FD_LOG_ERR(( "RPC tile must be enabled to run bench" ));
+    rpc_port = fd_pod_query_ushort( config->topo.config, "plugins.rpc.rpc_listen_port", 8899 );
+    char const * rpc_addr = fd_pod_query_cstr( config->topo.config, "plugins.rpc.rpc_listen_address", "127.0.0.1" );
+    if( FD_UNLIKELY( !fd_cstr_to_ip4_addr( rpc_addr, &rpc_ip_addr ) ) )
+      FD_LOG_ERR(( "failed to parse rpc listen address `%s`", rpc_addr ));
   }
 
   int is_auto_affinity = !strcmp( config->layout.affinity, "auto" );

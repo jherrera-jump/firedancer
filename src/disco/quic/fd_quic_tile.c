@@ -57,7 +57,8 @@ scratch_align( void ) {
 }
 
 static inline ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const * topo, fd_topo_tile_t const * tile ) {
+  (void)topo;
   ulong out_depth = tile->quic.out_depth;
   ulong reasm_max = tile->quic.reasm_cnt;
 
@@ -465,7 +466,7 @@ static void
 privileged_init( fd_topo_t *      topo,
                  fd_topo_tile_t * tile ) {
   fd_quic_ctx_t * ctx = fd_topo_obj_laddr( topo, tile->tile_obj_id );
-  if( FD_UNLIKELY( topo->objs[ tile->tile_obj_id ].footprint < scratch_footprint( tile ) ) ) {
+  if( FD_UNLIKELY( topo->objs[ tile->tile_obj_id ].footprint < scratch_footprint( topo, tile ) ) ) {
     FD_LOG_ERR(( "insufficient tile scratch space" ));
   }
   fd_memset( ctx, 0, sizeof(fd_quic_ctx_t) );
@@ -615,8 +616,8 @@ unprivileged_init( fd_topo_t *      topo,
   }
 
   ulong scratch_top = FD_SCRATCH_ALLOC_FINI( l, 1UL );
-  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( tile ) ) )
-    FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( tile ), scratch_top, (ulong)scratch + scratch_footprint( tile ) ));
+  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( topo, tile ) ) )
+    FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( topo, tile ), scratch_top, (ulong)scratch + scratch_footprint( topo, tile ) ));
 
   /* Call new/join here rather than in fd_quic so min/max can differ across uses */
   fd_histf_join( fd_histf_new( ctx->quic->metrics.service_duration, FD_MHIST_SECONDS_MIN( QUIC, SERVICE_DURATION_SECONDS ),

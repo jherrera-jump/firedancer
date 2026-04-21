@@ -15,9 +15,11 @@
 #include "../../src/flamenco/gossip/fd_gossip_message.h"
 #include "../../src/flamenco/genesis/fd_genesis_parse.h"
 #include "../../src/util/net/fd_ip4.h"
+#include "../../src/util/pod/fd_pod.h"
 #include "../../src/waltz/http/fd_http_server.h"
 #include "../../src/waltz/http/fd_http_server_private.h"
 
+#include <limits.h>
 #include <stddef.h>
 #include <sys/socket.h>
 #include <math.h> /* floor, isfinite */
@@ -144,14 +146,15 @@ static void fd_rpc_cstr_cJSON_free( char ** p ) { cJSON_free( *p ); }
 #define CSTR_JSON(__json, __out) __attribute__((cleanup(fd_rpc_cstr_cJSON_free))) char * __out = cJSON_PrintUnformatted( __json );
 
 static fd_http_server_params_t
-derive_http_params( fd_topo_tile_t const * tile ) {
+derive_http_params( fd_topo_t const * topo ) {
+  uchar const * cfg = topo->config;
   return (fd_http_server_params_t) {
-    .max_connection_cnt    = tile->rpc.max_http_connections,
+    .max_connection_cnt    = (ulong)fd_pod_query_long( cfg, "plugins.rpc.max_http_connections", 1024L ),
     .max_ws_connection_cnt = 0UL,
     .max_request_len       = FD_HTTP_SERVER_RPC_MAX_REQUEST_LEN,
     .max_ws_recv_frame_len = 0UL,
     .max_ws_send_frame_cnt = 0UL,
-    .outgoing_buffer_sz    = tile->rpc.send_buffer_size_mb * (1UL<<20UL),
+    .outgoing_buffer_sz    = (ulong)fd_pod_query_long( cfg, "plugins.rpc.send_buffer_size_mb", 1024L ) * (1UL<<20UL),
     .compress_websocket    = 0,
   };
 }
@@ -351,9 +354,14 @@ scratch_align( void ) {
 }
 
 static inline ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
-  ulong http_fp = fd_http_server_footprint( derive_http_params( tile ) );
-  if( FD_UNLIKELY( !http_fp ) ) FD_LOG_ERR(( "Invalid [tiles.rpc] config parameters" ));
+scratch_footprint( fd_topo_t const * topo, fd_topo_tile_t const * tile FD_PARAM_UNUSED ) {
+  uchar const * cfg = topo->config;
+  ulong http_fp = fd_http_server_footprint( derive_http_params( topo ) );
+  if( FD_UNLIKELY( !http_fp ) ) FD_LOG_ERR(( "Invalid [plugins.rpc] config parameters" ));
+
+  long _max_live_slots = fd_pod_query_long( cfg, "runtime.max_live_slots", -1L );
+  FD_TEST( _max_live_slots>0L );
+  ulong max_live_slots = (ulong)_max_live_slots;
 
   ulong l = FD_LAYOUT_INIT;
   l = FD_LAYOUT_APPEND( l, alignof( fd_rpc_tile_t ), sizeof( fd_rpc_tile_t )                      );
@@ -362,7 +370,7 @@ scratch_footprint( fd_topo_tile_t const * tile ) {
 #if FD_HAS_BZIP2
   l = FD_LAYOUT_APPEND( l, fd_alloc_align(),         fd_alloc_footprint()                         );
 #endif
-  l = FD_LAYOUT_APPEND( l, alignof(bank_info_t),     tile->rpc.max_live_slots*sizeof(bank_info_t) );
+  l = FD_LAYOUT_APPEND( l, alignof(bank_info_t),     max_live_slots*sizeof(bank_info_t) );
   l = FD_LAYOUT_APPEND( l, fd_rpc_cluster_node_dlist_align(), fd_rpc_cluster_node_dlist_footprint() );
   return FD_LAYOUT_FINI( l, scratch_align() );
 }
@@ -1886,25 +1894,34 @@ static void
 privileged_init( fd_topo_t *      topo,
                  fd_topo_tile_t * tile ) {
   void * scratch = fd_topo_obj_laddr( topo, tile->tile_obj_id );
+  uchar const * cfg = topo->config;
 
-  fd_http_server_params_t http_params = derive_http_params( tile );
+  fd_http_server_params_t http_params = derive_http_params( topo );
 
   FD_SCRATCH_ALLOC_INIT( l, scratch );
   fd_rpc_tile_t * ctx      = FD_SCRATCH_ALLOC_APPEND( l, alignof( fd_rpc_tile_t ), sizeof( fd_rpc_tile_t ) );
   fd_http_server_t * _http = FD_SCRATCH_ALLOC_APPEND( l, fd_http_server_align(),   fd_http_server_footprint( http_params ) );
 
-  if( FD_UNLIKELY( !strcmp( tile->rpc.identity_key_path, "" ) ) )
+  char const * identity_key_path = fd_pod_query_cstr( cfg, "paths.identity_key", "" );
+  if( FD_UNLIKELY( !strcmp( identity_key_path, "" ) ) )
     FD_LOG_ERR(( "identity_key_path not set" ));
 
-  const uchar * identity_key = fd_keyload_load( tile->rpc.identity_key_path, /* pubkey only: */ 1 );
+  const uchar * identity_key = fd_keyload_load( identity_key_path, /* pubkey only: */ 1 );
   fd_memcpy( ctx->identity_pubkey, identity_key, 32UL );
 
   fd_http_server_callbacks_t callbacks = {
     .request = rpc_http_request,
   };
   ctx->http = fd_http_server_join( fd_http_server_new( _http, http_params, callbacks, ctx ) );
-  fd_http_server_listen( ctx->http, tile->rpc.listen_addr, tile->rpc.listen_port );
-  FD_LOG_NOTICE(( "rpc server listening at http://" FD_IP4_ADDR_FMT ":%u", FD_IP4_ADDR_FMT_ARGS( tile->rpc.listen_addr ), tile->rpc.listen_port ));
+
+  uint listen_addr;
+  char const * listen_addr_str = fd_pod_query_cstr( cfg, "plugins.rpc.rpc_listen_address", "127.0.0.1" );
+  if( FD_UNLIKELY( !fd_cstr_to_ip4_addr( listen_addr_str, &listen_addr ) ) )
+    FD_LOG_ERR(( "failed to parse [plugins.rpc.rpc_listen_address] `%s`", listen_addr_str ));
+  ushort listen_port = (ushort)fd_pod_query_long( cfg, "plugins.rpc.rpc_listen_port", 8899L );
+
+  fd_http_server_listen( ctx->http, listen_addr, listen_port );
+  FD_LOG_NOTICE(( "rpc server listening at http://" FD_IP4_ADDR_FMT ":%u", FD_IP4_ADDR_FMT_ARGS( listen_addr ), listen_port ));
 }
 
 extern char const fdctl_version_string[];
@@ -1940,22 +1957,27 @@ static void
 unprivileged_init( fd_topo_t *      topo,
                    fd_topo_tile_t * tile ) {
   void * scratch = fd_topo_obj_laddr( topo, tile->tile_obj_id );
+  uchar const * cfg = topo->config;
+
+  long _max_live_slots = fd_pod_query_long( cfg, "runtime.max_live_slots", -1L );
+  FD_TEST( _max_live_slots>0L );
+  ulong max_live_slots = (ulong)_max_live_slots;
 
   FD_SCRATCH_ALLOC_INIT( l, scratch );
   fd_rpc_tile_t * ctx = FD_SCRATCH_ALLOC_APPEND( l, alignof( fd_rpc_tile_t ), sizeof( fd_rpc_tile_t )                                );
-                        FD_SCRATCH_ALLOC_APPEND( l, fd_http_server_align(),   fd_http_server_footprint( derive_http_params( tile ) ) );
+                        FD_SCRATCH_ALLOC_APPEND( l, fd_http_server_align(),   fd_http_server_footprint( derive_http_params( topo ) ) );
   void * _alloc       = FD_SCRATCH_ALLOC_APPEND( l, fd_alloc_align(),         fd_alloc_footprint()                                   );
 #if FD_HAS_BZIP2
   void * _bz2_alloc   = FD_SCRATCH_ALLOC_APPEND( l, fd_alloc_align(),         fd_alloc_footprint()                                   );
 #endif
-  void * _banks       = FD_SCRATCH_ALLOC_APPEND( l, alignof(bank_info_t),     tile->rpc.max_live_slots*sizeof(bank_info_t)           );
+  void * _banks       = FD_SCRATCH_ALLOC_APPEND( l, alignof(bank_info_t),     max_live_slots*sizeof(bank_info_t)                     );
   void * _nodes_dlist = FD_SCRATCH_ALLOC_APPEND( l, fd_rpc_cluster_node_dlist_align(), fd_rpc_cluster_node_dlist_footprint() );
 
   fd_alloc_t * alloc = fd_alloc_join( fd_alloc_new( _alloc, 1UL ), 1UL );
   FD_TEST( alloc );
   cJSON_alloc_install( alloc );
 
-  ctx->delay_startup = tile->rpc.delay_startup;
+  ctx->delay_startup = fd_pod_query_int( cfg, "plugins.rpc.delay_startup", 1 );
   ctx->keyswitch = fd_keyswitch_join( fd_topo_obj_laddr( topo, tile->id_keyswitch_obj_id ) );
   FD_TEST( ctx->keyswitch );
 
@@ -1977,7 +1999,7 @@ unprivileged_init( fd_topo_t *      topo,
 
   ctx->cluster_nodes_dlist = fd_rpc_cluster_node_dlist_join( fd_rpc_cluster_node_dlist_new( _nodes_dlist ) );
   ctx->banks = _banks;
-  ctx->max_live_slots = tile->rpc.max_live_slots;
+  ctx->max_live_slots = max_live_slots;
   for( ulong i=0UL; i<ctx->max_live_slots; i++ ) ctx->banks[ i ].slot = ULONG_MAX;
 
   FD_TEST( fd_cstr_printf_check( ctx->version_string, sizeof( ctx->version_string ), NULL, "%s", fdctl_version_string ) );
@@ -2000,11 +2022,14 @@ unprivileged_init( fd_topo_t *      topo,
 
   *ctx->replay_out = out1( topo, tile, "rpc_replay" ); FD_TEST( ctx->replay_out->idx!=ULONG_MAX );
 
-  fd_accdb_init_from_topo( ctx->accdb, topo, tile, tile->rpc.accdb_max_depth );
+  long _wds = fd_pod_query_long( cfg, "accounts.write_delay_slots", -1L );
+  FD_TEST( _wds>=0L );
+  ulong accdb_max_depth = max_live_slots + (ulong)_wds;
+  fd_accdb_init_from_topo( ctx->accdb, topo, tile, accdb_max_depth );
 
   ulong scratch_top = FD_SCRATCH_ALLOC_FINI( l, 1UL );
-  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( tile ) ) )
-    FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( tile ), scratch_top, (ulong)scratch + scratch_footprint( tile ) ));
+  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( topo, tile ) ) )
+    FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( topo, tile ), scratch_top, (ulong)scratch + scratch_footprint( topo, tile ) ));
 }
 
 static ulong
@@ -2040,11 +2065,11 @@ populate_allowed_fds( fd_topo_t const *      topo,
 }
 
 static ulong
-rlimit_file_cnt( fd_topo_t const *      topo FD_PARAM_UNUSED,
-                 fd_topo_tile_t const * tile ) {
+rlimit_file_cnt( fd_topo_t const *      topo,
+                 fd_topo_tile_t const * tile FD_PARAM_UNUSED ) {
   /* pipefd, socket, stderr, logfile, and one spare for new accept() connections */
   ulong base = 5UL;
-  return base+tile->rpc.max_http_connections;
+  return base + (ulong)fd_pod_query_long( topo->config, "plugins.rpc.max_http_connections", 1024L );
 }
 
 #define STEM_BURST (1UL)

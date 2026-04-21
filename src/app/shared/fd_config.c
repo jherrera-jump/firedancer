@@ -62,6 +62,37 @@ parse_core_dump_level( char const * level ) {
   return -1;
 }
 
+/* Recursively merge leaf entries from src pod into dst pod,
+   overwriting existing keys.  path_buf accumulates the dotted
+   key path during recursion. */
+static void
+config_pod_merge( uchar *       dst,
+                  uchar const * src,
+                  char *        path,
+                  ulong         path_len ) {
+  for( fd_pod_iter_t iter = fd_pod_iter_init( src );
+       !fd_pod_iter_done( iter );
+       iter = fd_pod_iter_next( iter ) ) {
+    fd_pod_info_t info = fd_pod_iter_info( iter );
+    ulong key_len = strlen( info.key );
+    ulong new_len;
+    if( path_len ) {
+      path[ path_len ] = '.';
+      fd_memcpy( path + path_len + 1UL, info.key, key_len + 1UL );
+      new_len = path_len + 1UL + key_len;
+    } else {
+      fd_memcpy( path, info.key, key_len + 1UL );
+      new_len = key_len;
+    }
+    if( info.val_type == FD_POD_VAL_TYPE_SUBPOD ) {
+      config_pod_merge( dst, (uchar const *)info.val, path, new_len );
+    } else {
+      fd_pod_remove( dst, path );
+      FD_TEST( fd_pod_insert( dst, path, info.val_type, info.val_sz, info.val ) );
+    }
+  }
+}
+
 void
 fd_config_load_buf( fd_config_t * out,
                     char const *  buf,
@@ -97,6 +128,22 @@ fd_config_load_buf( fd_config_t * out,
       FD_LOG_ERR(( "Failed to parse config file (%s): %s", path, fd_toml_strerror( toml_errc ) ));
       break;
     }
+  }
+
+  /* Merge parsed config into config_pod.  On the first call (default
+     config), config_pod is empty so we copy wholesale.  On subsequent
+     calls (override, user config), we merge leaf entries so that
+     defaults for keys the user didn't override are preserved. */
+  if( !fd_pod_cnt( out->config_pod ) ) {
+    ulong pod_used = fd_pod_used( pod );
+    if( FD_UNLIKELY( pod_used>sizeof(out->config_pod) ) )
+      FD_LOG_ERR(( "Config pod too large for config_pod (%lu > %lu)", pod_used, sizeof(out->config_pod) ));
+    fd_memcpy( out->config_pod, pod, pod_used );
+    fd_pod_resize( out->config_pod, sizeof(out->config_pod) );
+  } else {
+    char merge_path[ 256 ];
+    merge_path[ 0 ] = '\0';
+    config_pod_merge( out->config_pod, pod, merge_path, 0UL );
   }
 
   if( FD_UNLIKELY( !fd_config_extract_pod( pod, out ) ) ) FD_LOG_ERR(( "Failed to parse config file (%s): there are unrecognized keys logged above", path ));
@@ -611,6 +658,7 @@ fd_config_load( int           is_firedancer,
                 char const *  user_config_path,
                 fd_config_t * config ) {
   memset( config, 0, sizeof(config_t) );
+  FD_TEST( fd_pod_new( config->config_pod, sizeof(config->config_pod) ) );
   config->is_firedancer = is_firedancer;
   config->boot_timestamp_nanos = fd_log_wallclock();
 
@@ -632,6 +680,22 @@ fd_config_load( int           is_firedancer,
   }
 
   fd_config_fill( config, is_local_cluster );
+
+  /* fd_config_fill expands {user}/{name} placeholders in path strings.
+     Update config_pod so plugin tiles reading paths dynamically see
+     the resolved values instead of raw templates. */
+  fd_pod_remove( config->config_pod, "paths.base" );
+  fd_pod_insert_cstr( config->config_pod, "paths.base", config->paths.base );
+  fd_pod_remove( config->config_pod, "paths.identity_key" );
+  fd_pod_insert_cstr( config->config_pod, "paths.identity_key", config->paths.identity_key );
+  fd_pod_remove( config->config_pod, "paths.vote_account" );
+  fd_pod_insert_cstr( config->config_pod, "paths.vote_account", config->paths.vote_account );
+  fd_pod_remove( config->config_pod, "paths.snapshots" );
+  fd_pod_insert_cstr( config->config_pod, "paths.snapshots", config->paths.snapshots );
+  fd_pod_remove( config->config_pod, "paths.genesis" );
+  fd_pod_insert_cstr( config->config_pod, "paths.genesis", config->paths.genesis );
+  fd_pod_remove( config->config_pod, "paths.accounts" );
+  fd_pod_insert_cstr( config->config_pod, "paths.accounts", config->paths.accounts );
 }
 
 int

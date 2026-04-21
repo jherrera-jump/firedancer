@@ -106,7 +106,8 @@ scratch_align( void ) {
 }
 
 FD_FN_PURE static inline ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const * topo FD_PARAM_UNUSED,
+                   fd_topo_tile_t const * tile ) {
   (void)tile;
   ulong l = FD_LAYOUT_INIT;
   l = FD_LAYOUT_APPEND( l, alignof(fd_backt_tile_t),     sizeof(fd_backt_tile_t)                        );
@@ -495,8 +496,8 @@ unprivileged_init( fd_topo_t *      topo,
   ctx->store = fd_store_join( fd_topo_obj_laddr( topo, fd_pod_query_ulong( topo->props, "store", ULONG_MAX ) ) );
 
   ulong scratch_top = FD_SCRATCH_ALLOC_FINI( l, 1UL );
-  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( tile ) ) )
-    FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( tile ), scratch_top, (ulong)scratch + scratch_footprint( tile ) ));
+  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( topo, tile ) ) )
+    FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( topo, tile ), scratch_top, (ulong)scratch + scratch_footprint( topo, tile ) ));
 }
 
 #define STEM_BURST                  (2UL) /* 1 after_credit + 1 returnable_frag */

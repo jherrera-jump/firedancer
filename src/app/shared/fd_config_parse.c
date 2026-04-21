@@ -261,14 +261,6 @@ fd_config_extract_pod( uchar *       pod,
   CFG_POP      ( ulong,  tiles.gui.max_http_request_length                );
   CFG_POP      ( ulong,  tiles.gui.send_buffer_size_mb                    );
 
-  CFG_POP      ( bool,   tiles.rpc.enabled                                );
-  CFG_POP      ( cstr,   tiles.rpc.rpc_listen_address                     );
-  CFG_POP      ( ushort, tiles.rpc.rpc_listen_port                        );
-  CFG_POP      ( ulong,  tiles.rpc.max_http_connections                   );
-  CFG_POP      ( ulong,  tiles.rpc.max_http_request_length                );
-  CFG_POP      ( ulong,  tiles.rpc.send_buffer_size_mb                    );
-  CFG_POP      ( bool,   tiles.rpc.delay_startup                          );
-
   CFG_POP      ( ushort, tiles.repair.repair_intake_listen_port           );
   CFG_POP      ( ushort, tiles.repair.repair_serve_listen_port            );
   CFG_POP      ( ulong,  tiles.repair.slot_max                            );
@@ -373,6 +365,8 @@ fd_config_extract_pod( uchar *       pod,
   CFG_RENAMED( development.net.sock_send_buffer_size,    net.socket.send_buffer_size    );
 
 # undef CFG_RENAMED
+
+  fd_pod_remove( pod, "plugins" );
 
   if( FD_UNLIKELY( !fdctl_pod_find_leftover( pod ) ) ) return NULL;
   return config;

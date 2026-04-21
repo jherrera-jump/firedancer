@@ -76,6 +76,7 @@ repair_topo( config_t * config ) {
   ulong gossvf_tile_cnt = config->firedancer.layout.gossvf_tile_count;
 
   fd_topo_t * topo = { fd_topob_new( &config->topo, config->name ) };
+  fd_memcpy( topo->config, config->config_pod, sizeof(topo->config) );
   topo->max_page_size = fd_cstr_to_shmem_page_sz( config->hugetlbfs.max_page_size );
   topo->gigantic_page_threshold = config->hugetlbfs.gigantic_page_threshold_mib << 20;
 
@@ -174,8 +175,8 @@ repair_topo( config_t * config ) {
   FOR(net_tile_cnt) fd_topos_net_rx_link( topo, "net_shred",  i, config->net.ingress_buffer_size );
 
   /*                                              topo, tile_name, tile_wksp, metrics_wksp, flags */
-  FOR(shred_tile_cnt)              fd_topob_tile( topo, "shred",   "shred",   "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH );
-  fd_topo_tile_t * repair_tile =   fd_topob_tile( topo, "repair",  "repair",  "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH );
+  FOR(shred_tile_cnt)              fd_topob_tile( topo, "shred",  i,    "shred",   "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH );
+  fd_topo_tile_t * repair_tile =   fd_topob_tile( topo, "repair", 0UL,  "repair",  "metric_in",  FD_TOPOB_TILE_USES_ID_KEYSWITCH );
 
   /* Setup a shared wksp object for fec sets. */
 
@@ -272,7 +273,7 @@ repair_topo( config_t * config ) {
   if( 1 ) {
     fd_topob_wksp( topo, "scap" );
 
-    fd_topo_tile_t * scap_tile = fd_topob_tile( topo, "scap", "scap", "metric_in", 0UL );
+    fd_topo_tile_t * scap_tile = fd_topob_tile( topo, "scap", 0UL, "scap", "metric_in", 0UL );
 
     fd_topob_tile_in(  topo, "scap", 0UL, "metric_in", "repair_net", 0UL, FD_TOPOB_UNRELIABLE, FD_TOPOB_POLLED );
     for( ulong j=0UL; j<net_tile_cnt; j++ ) {

@@ -33,8 +33,9 @@ scratch_align( void ) {
 }
 
 static ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
-  (void)tile;
+scratch_footprint( fd_topo_t const * topo,
+                   fd_topo_tile_t const * tile ) {
+  (void)topo;
   ulong l = FD_LAYOUT_INIT;
   l = FD_LAYOUT_APPEND( l, alignof(fd_snapwm_tile_t), sizeof(fd_snapwm_tile_t)                              );
   l = FD_LAYOUT_APPEND( l, fd_vinyl_io_wd_align(),    fd_vinyl_io_wd_footprint( tile->snapwm.snapwr_depth ) );

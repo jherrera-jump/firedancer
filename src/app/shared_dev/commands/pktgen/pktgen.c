@@ -50,15 +50,16 @@ pktgen_topo( config_t * config ) {
   /* Reset topology from scratch */
   fd_topo_t * topo = &config->topo;
   fd_topob_new( &config->topo, config->name );
+  fd_memcpy( topo->config, config->config_pod, sizeof(topo->config) );
   topo->max_page_size = fd_cstr_to_shmem_page_sz( config->hugetlbfs.max_page_size );
 
   fd_topob_wksp( topo, "metric" );
   fd_topob_wksp( topo, "metric_in" );
   fd_topos_net_tiles( topo, config->layout.net_tile_count, &config->net, config->tiles.netlink.max_routes, config->tiles.netlink.max_peer_routes, config->tiles.netlink.max_neighbors, 0 );
-  fd_topob_tile( topo, "metric",  "metric", "metric_in", FD_TOPOB_TILE_FLOATING );
+  fd_topob_tile( topo, "metric", 0UL, "metric", "metric_in", FD_TOPOB_TILE_FLOATING );
 
   fd_topob_wksp( topo, "pktgen" );
-  fd_topo_tile_t * pktgen_tile = fd_topob_tile( topo, "pktgen", "pktgen", "pktgen", 0UL );
+  fd_topo_tile_t * pktgen_tile = fd_topob_tile( topo, "pktgen", 0UL, "pktgen", "pktgen", 0UL );
   if( FD_UNLIKELY( !fd_cstr_to_ip4_addr( config->development.pktgen.fake_dst_ip, &pktgen_tile->pktgen.fake_dst_ip ) ) ) {
     FD_LOG_ERR(( "Invalid [development.pktgen.fake_dst_ip]" ));
   }

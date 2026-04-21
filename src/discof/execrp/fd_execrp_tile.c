@@ -108,7 +108,8 @@ scratch_align( void ) {
 }
 
 FD_FN_PURE static inline ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const * topo FD_PARAM_UNUSED,
+                   fd_topo_tile_t const * tile ) {
   ulong l = FD_LAYOUT_INIT;
   l = FD_LAYOUT_APPEND(   l, alignof(fd_execrp_tile_t),    sizeof(fd_execrp_tile_t)                             );
   l = FD_LAYOUT_APPEND(   l, fd_capture_ctx_align(),       fd_capture_ctx_footprint()                           );
@@ -321,11 +322,11 @@ unprivileged_init( fd_topo_t *      topo,
   uchar * pc_scratch        = FD_SCRATCH_ALLOC_APPEND( l, FD_PROGCACHE_SCRATCH_ALIGN, FD_PROGCACHE_SCRATCH_FOOTPRINT );
   ulong  scratch_alloc_mem  = FD_SCRATCH_ALLOC_FINI( l, scratch_align() );
 
-  if( FD_UNLIKELY( scratch_alloc_mem - (ulong)scratch  - scratch_footprint( tile ) ) ) {
+  if( FD_UNLIKELY( scratch_alloc_mem - (ulong)scratch  - scratch_footprint( topo, tile ) ) ) {
     FD_LOG_ERR( ( "Scratch_alloc_mem did not match scratch_footprint diff: %lu alloc: %lu footprint: %lu",
-      scratch_alloc_mem - (ulong)scratch - scratch_footprint( tile ),
+      scratch_alloc_mem - (ulong)scratch - scratch_footprint( topo, tile ),
       scratch_alloc_mem,
-      (ulong)scratch + scratch_footprint( tile ) ) );
+      (ulong)scratch + scratch_footprint( topo, tile ) ) );
   }
 
   for( ulong i=0UL; i<FD_TXN_ACTUAL_SIG_MAX; i++ ) {

@@ -243,7 +243,7 @@ test_fixture_replay( fd_wksp_t * wksp ) {
 
   FD_TEST( scratch_align()==128UL );
 
-  ulong footprint = scratch_footprint( tile );
+  ulong footprint = scratch_footprint( NULL, tile );
   FD_TEST( footprint );
 
   void * scratch = fd_wksp_alloc_laddr( wksp, scratch_align(), footprint, 1UL );
@@ -369,7 +369,7 @@ eqvoc_setup( fd_wksp_t * wksp ) {
   memset( tile, 0, sizeof(*tile) );
   tile->tower.max_live_slots = MOCK_SLOT_MAX;
 
-  void * scratch = fd_wksp_alloc_laddr( wksp, scratch_align(), scratch_footprint( tile ), 1UL );
+  void * scratch = fd_wksp_alloc_laddr( wksp, scratch_align(), scratch_footprint( NULL, tile ), 1UL );
   FD_TEST( scratch );
 
   ((fd_tower_tile_t *)scratch)->seed = 42UL;

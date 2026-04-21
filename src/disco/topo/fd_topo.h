@@ -374,21 +374,6 @@ struct fd_topo_tile {
     } gui;
 
     struct {
-      uint   listen_addr;
-      ushort listen_port;
-
-      ulong max_http_connections;
-      ulong send_buffer_size_mb;
-      ulong max_http_request_length;
-
-      ulong max_live_slots;
-      ulong accdb_max_depth;
-
-      char identity_key_path[ PATH_MAX ];
-      int  delay_startup;
-    } rpc;
-
-    struct {
       uint   prometheus_listen_addr;
       ushort prometheus_listen_port;
     } metric;
@@ -710,6 +695,10 @@ typedef struct {
 struct fd_topo {
   char           app_name[ 256UL ];
   uchar          props[ 32768UL ];
+  uchar          config[ 131072UL ]; /* Full parsed TOML config pod.
+                                        Populated during config loading
+                                        so tiles can read any config
+                                        value dynamically. */
   char           namespace[ 7 ]; /* Plugin namespace; set by framework
                                     during plugin dispatch.  "fd" during
                                     core topology construction, "" when
@@ -753,7 +742,7 @@ typedef struct {
   ulong (*populate_allowed_seccomp)( fd_topo_t const * topo, fd_topo_tile_t const * tile, ulong out_cnt, struct sock_filter * out );
   ulong (*populate_allowed_fds    )( fd_topo_t const * topo, fd_topo_tile_t const * tile, ulong out_fds_sz, int * out_fds );
   ulong (*scratch_align           )( void );
-  ulong (*scratch_footprint       )( fd_topo_tile_t const * tile );
+  ulong (*scratch_footprint       )( fd_topo_t const * topo, fd_topo_tile_t const * tile );
   ulong (*loose_footprint         )( fd_topo_tile_t const * tile );
   void  (*privileged_init         )( fd_topo_t * topo, fd_topo_tile_t * tile );
   void  (*unprivileged_init       )( fd_topo_t * topo, fd_topo_tile_t * tile );

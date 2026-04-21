@@ -287,7 +287,7 @@ main( int     argc,
   /* Mock a topology */
   static fd_topo_t topo[1];
   fd_topob_wksp( topo, "wksp" );
-  fd_topo_tile_t * topo_tile = fd_topob_tile( topo, "net", "wksp", "wksp", 0UL );
+  fd_topo_tile_t * topo_tile = fd_topob_tile( topo, "net", 0UL, "wksp", "wksp", 0UL );
   topo_tile->xdp.xdp_rx_queue_size = (uint)rxq_depth;
   topo_tile->xdp.xdp_tx_queue_size = (uint)txq_depth;
   topo_tile->xdp.free_ring_depth   = (uint)txq_depth;
@@ -296,7 +296,7 @@ main( int     argc,
   FD_TEST( topo_tile->tile_obj_id == topo->tile_cnt - 1 );
 
   /* Allocate tile memory */
-  fd_topo_tile_t * net_tile = fd_wksp_alloc_laddr( wksp, scratch_align(), scratch_footprint( topo_tile ), WKSP_TAG );
+  fd_topo_tile_t * net_tile = fd_wksp_alloc_laddr( wksp, scratch_align(), scratch_footprint( topo, topo_tile ), WKSP_TAG );
   FD_TEST( net_tile );
   memset( net_tile, 0, sizeof(fd_topo_net_tile_t) );
   topo->objs[ topo_tile->tile_obj_id ].offset = (ulong)net_tile - (ulong)wksp;

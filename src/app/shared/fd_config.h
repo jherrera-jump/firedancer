@@ -247,6 +247,10 @@ struct fd_config {
 
   fd_topo_t topo;
 
+  uchar config_pod[ 131072UL ]; /* Snapshot of the full parsed TOML
+                                    config pod.  Copied into topo.config
+                                    after fd_topob_new. */
+
   char cluster[ 32 ];
   int is_live_cluster;
 
@@ -477,16 +481,6 @@ struct fd_config {
       ulong  max_http_request_length;
       ulong  send_buffer_size_mb;
     } gui;
-
-    struct {
-      int    enabled;
-      char   rpc_listen_address[ 16 ];
-      ushort rpc_listen_port;
-      ulong  max_http_connections;
-      ulong  max_http_request_length;
-      ulong  send_buffer_size_mb;
-      int    delay_startup;
-    } rpc;
 
     struct {
       ushort repair_intake_listen_port;

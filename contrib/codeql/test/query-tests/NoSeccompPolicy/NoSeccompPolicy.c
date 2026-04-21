@@ -121,7 +121,7 @@ populate_sock_filter_policy_another_tile( ulong out_cnt, void * out, unsigned in
 
 /* Mock function pointers for other tile fields */
 static ulong mock_scratch_align( void ) { return 4096UL; }
-static ulong mock_scratch_footprint( void const * tile ) { (void)tile; return 65536UL; }
+static ulong mock_scratch_footprint( void const * topo, void const * tile ) { (void)topo; (void)tile; return 65536UL; }
 static void  mock_privileged_init( void * topo, void * tile ) { (void)topo; (void)tile; }
 static void  mock_unprivileged_init( void * topo, void * tile ) { (void)topo; (void)tile; }
 static void  mock_run( void * topo, void * tile, void * cnc ) { (void)topo; (void)tile; (void)cnc; }

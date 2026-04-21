@@ -2,6 +2,7 @@
 #include "config.h"
 #include "../shared/boot/fd_boot.h"
 #include "../shared/commands/configure/configure.h"
+#include "../../../plugin/generated/fd_plugin_registry.h"
 
 char const * FD_APP_NAME    = "Firedancer";
 char const * FD_BINARY_NAME = "firedancer";
@@ -166,6 +167,7 @@ fd_topo_run_tile_t * TILES[] = {
   &fd_tile_ipecho,
   &fd_tile_vinyl,
   &fd_tile_solcap,
+  PLUGIN_TILE_LIST
   NULL,
 };
 

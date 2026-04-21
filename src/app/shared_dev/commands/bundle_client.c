@@ -14,6 +14,7 @@ static void
 bundle_client_topo( config_t *   config ) {
   fd_topo_t * topo = &config->topo;
   fd_topob_new( &config->topo, config->name );
+  fd_memcpy( topo->config, config->config_pod, sizeof(topo->config) );
   topo->max_page_size = fd_cstr_to_shmem_page_sz( config->hugetlbfs.max_page_size );
 
   fd_topob_wksp( topo, "metric_in" );
@@ -21,13 +22,13 @@ bundle_client_topo( config_t *   config ) {
   /* Tiles */
 
   fd_topob_wksp( topo, "bundle" );
-  fd_topo_tile_t * bundle_tile = fd_topob_tile( topo, "bundle", "bundle", "metric_in", FD_TOPOB_TILE_USES_ID_KEYSWITCH );
+  fd_topo_tile_t * bundle_tile = fd_topob_tile( topo, "bundle", 0UL, "bundle", "metric_in", FD_TOPOB_TILE_USES_ID_KEYSWITCH );
 
   fd_topob_wksp( topo, "sign" );
-  fd_topo_tile_t * sign_tile = fd_topob_tile( topo, "sign", "sign", "metric_in", FD_TOPOB_TILE_USES_ID_KEYSWITCH );
+  fd_topo_tile_t * sign_tile = fd_topob_tile( topo, "sign", 0UL, "sign", "metric_in", FD_TOPOB_TILE_USES_ID_KEYSWITCH );
 
   fd_topob_wksp( topo, "metric" );
-  fd_topo_tile_t * metric_tile = fd_topob_tile( topo, "metric", "metric", "metric_in", FD_TOPOB_TILE_FLOATING );
+  fd_topo_tile_t * metric_tile = fd_topob_tile( topo, "metric", 0UL, "metric", "metric_in", FD_TOPOB_TILE_FLOATING );
 
   /* Links */
 

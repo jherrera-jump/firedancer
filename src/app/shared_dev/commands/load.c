@@ -4,6 +4,7 @@
 #include "../../shared/commands/run/run.h"
 #include "../../../disco/topo/fd_topob.h"
 #include "../../../util/net/fd_ip4.h"
+#include "../../../util/pod/fd_pod.h"
 
 #include <unistd.h>
 
@@ -80,7 +81,7 @@ load_cmd_fn( args_t *   args,
 
   if( FD_UNLIKELY( !args->load.rpc_port ) ) {
     if( FD_UNLIKELY( config->is_firedancer ) ) {
-      args->load.rpc_port = config->tiles.rpc.rpc_listen_port;
+      args->load.rpc_port = fd_pod_query_ushort( config->topo.config, "plugins.rpc.rpc_listen_port", 8899 );
     } else {
       args->load.rpc_port = config->frankendancer.rpc.port;
     }
@@ -104,6 +105,7 @@ load_cmd_fn( args_t *   args,
     args->load.connections = config->layout.quic_tile_count;
 
   fd_topo_t * topo = { fd_topob_new( &config->topo, config->name ) };
+  fd_memcpy( topo->config, config->config_pod, sizeof(topo->config) );
   topo->max_page_size = fd_cstr_to_shmem_page_sz( config->hugetlbfs.max_page_size );
   add_bench_topo( topo,
                   args->load.affinity,

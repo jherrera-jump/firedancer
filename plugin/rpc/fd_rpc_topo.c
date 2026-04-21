@@ -14,7 +14,7 @@ fd_rpc_topo( fd_topo_t * topo ) {
    * Tile
    ********************************************************************/
 
-  fd_topo_tile_t * rpc_tile = fd_topob_tile( topo, "rpc", "rpc", "metric_in", FD_TOPOB_TILE_USES_ID_KEYSWITCH );
+  fd_topo_tile_t * rpc_tile = fd_topob_tile( topo, "rpc", 0UL, "rpc", "metric_in", FD_TOPOB_TILE_USES_ID_KEYSWITCH );
 
   /*********************************************************************
    * Links — rpc_replay (RPC -> replay)

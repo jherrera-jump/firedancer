@@ -369,7 +369,8 @@ scratch_align( void ) {
 }
 
 FD_FN_PURE static inline ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const * topo, fd_topo_tile_t const * tile ) {
+  (void)topo;
   fd_pack_limits_t limits[1] = {{
     .max_cost_per_block           = tile->pack.larger_max_cost_per_block ? LARGER_MAX_COST_PER_BLOCK : FD_PACK_MAX_COST_PER_BLOCK_UPPER_BOUND,
     .max_vote_cost_per_block      = FD_PACK_MAX_VOTE_COST_PER_BLOCK_UPPER_BOUND,
@@ -1492,8 +1493,8 @@ unprivileged_init( fd_topo_t *      topo,
   FD_LOG_INFO(( "packing microblocks of at most %lu transactions to %lu execle tiles using strategy %i", EFFECTIVE_TXN_PER_MICROBLOCK, tile->pack.execle_tile_count, ctx->strategy ));
 
   ulong scratch_top = FD_SCRATCH_ALLOC_FINI( l, 1UL );
-  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( tile ) ) )
-    FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( tile ), scratch_top, (ulong)scratch + scratch_footprint( tile ) ));
+  if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( topo, tile ) ) )
+    FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( topo, tile ), scratch_top, (ulong)scratch + scratch_footprint( topo, tile ) ));
 }
 
 static ulong

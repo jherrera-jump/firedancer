@@ -45,7 +45,9 @@ scratch_align( void ) {
 }
 
 static ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const * topo,
+                   fd_topo_tile_t const * tile ) {
+  (void)topo;
   (void)tile;
   return sizeof(fd_snapwh_t);
 }

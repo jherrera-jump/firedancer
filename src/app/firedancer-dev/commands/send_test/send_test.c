@@ -51,6 +51,7 @@ send_test_topo( config_t * config ) {
 
   /* Setup topology */
   fd_topo_t * topo    = fd_topob_new( &config->topo, config->name );
+  fd_memcpy( topo->config, config->config_pod, sizeof(topo->config) );
   topo->max_page_size = fd_cstr_to_shmem_page_sz( config->hugetlbfs.max_page_size );
 
   ulong tile_to_cpu[ FD_TILE_MAX ] = {0};
@@ -82,7 +83,7 @@ send_test_topo( config_t * config ) {
 
   /* Add send tile */
   fd_topob_wksp( topo, "txsend" );
-  fd_topob_tile( topo, "txsend", "txsend", "metric_in", 0UL );
+  fd_topob_tile( topo, "txsend", 0UL, "txsend", "metric_in", 0UL );
 
   /* wksps for send links */
   fd_topob_wksp( topo, "txsend_net" );

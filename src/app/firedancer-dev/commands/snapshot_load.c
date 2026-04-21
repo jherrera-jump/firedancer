@@ -37,6 +37,7 @@ static void
 snapshot_load_topo( config_t * config ) {
   fd_topo_t * topo = &config->topo;
   fd_topob_new( &config->topo, config->name );
+  fd_memcpy( topo->config, config->config_pod, sizeof(topo->config) );
   topo->max_page_size = fd_cstr_to_shmem_page_sz( config->hugetlbfs.max_page_size );
 
   fd_topob_wksp( topo, "txncache" );
@@ -68,36 +69,36 @@ snapshot_load_topo( config_t * config ) {
   /* metrics tile *****************************************************/
   fd_topob_wksp( topo, "metric_in" );
   fd_topob_wksp( topo, "metric" );
-  fd_topob_tile( topo, "metric",  "metric", "metric_in", FD_TOPOB_TILE_FLOATING );
+  fd_topob_tile( topo, "metric", 0UL, "metric", "metric_in", FD_TOPOB_TILE_FLOATING );
 
   /* read() tile */
   fd_topob_wksp( topo, "snapct" );
-  fd_topob_tile( topo, "snapct", "snapct", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+  fd_topob_tile( topo, "snapct", 0UL, "snapct", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
 
   /* load tile */
   fd_topob_wksp( topo, "snapld" );
-  fd_topob_tile( topo, "snapld", "snapld", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+  fd_topob_tile( topo, "snapld", 0UL, "snapld", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
 
   /* "snapdc": Zstandard decompress tile */
   fd_topob_wksp( topo, "snapdc" );
-  fd_topob_tile( topo, "snapdc", "snapdc", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+  fd_topob_tile( topo, "snapdc", 0UL, "snapdc", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
 
   /* "snapin": Snapshot parser tile */
   fd_topob_wksp( topo, "snapin" );
-  fd_topo_tile_t * snapin_tile = fd_topob_tile( topo, "snapin", "snapin", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+  fd_topo_tile_t * snapin_tile = fd_topob_tile( topo, "snapin", 0UL, "snapin", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
 
   /* "snapwr": Snapshot writer tile */
   int vinyl_enabled = !config->firedancer.accounts.in_memory_only;
   if( vinyl_enabled ) {
 
     fd_topob_wksp( topo, "snapwm" );
-    fd_topob_tile( topo, "snapwm", "snapwm", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+    fd_topob_tile( topo, "snapwm", 0UL, "snapwm", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
 
     fd_topob_wksp( topo, "snapwh" );
-    fd_topob_tile( topo, "snapwh", "snapwh", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+    fd_topob_tile( topo, "snapwh", 0UL, "snapwh", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
 
     fd_topob_wksp( topo, "snapwr" );
-    FOR(snapwr_tile_cnt) fd_topob_tile( topo, "snapwr", "snapwr", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_FLOATING );
+    FOR(snapwr_tile_cnt) fd_topob_tile( topo, "snapwr", i, "snapwr", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_FLOATING );
   }
 
   fd_topob_wksp( topo, "snapct_ld"    );
@@ -122,8 +123,8 @@ snapshot_load_topo( config_t * config ) {
     if( vinyl_enabled ) {
       fd_topob_wksp( topo, "snaplh"    );
       fd_topob_wksp( topo, "snaplv"    );
-      FOR(snaplh_tile_cnt) fd_topob_tile( topo, "snaplh", "snaplh", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
-      /**/                 fd_topob_tile( topo, "snaplv", "snaplv", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+      FOR(snaplh_tile_cnt) fd_topob_tile( topo, "snaplh", i, "snaplh", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+      /**/                 fd_topob_tile( topo, "snaplv", 0UL, "snaplv", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
       fd_topob_wksp( topo, "vinyl_admin" );
       fd_topob_wksp( topo, "snaplv_lh" );
       fd_topob_wksp( topo, "snaplh_lv" );
@@ -132,8 +133,8 @@ snapshot_load_topo( config_t * config ) {
     } else {
       fd_topob_wksp( topo, "snapla"    );
       fd_topob_wksp( topo, "snapls"    );
-      FOR(lta_tile_cnt)  fd_topob_tile( topo, "snapla", "snapla", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
-      /**/               fd_topob_tile( topo, "snapls", "snapls", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+      FOR(lta_tile_cnt)  fd_topob_tile( topo, "snapla", i, "snapla", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
+      /**/               fd_topob_tile( topo, "snapls", 0UL, "snapls", "metric_in", FD_TOPOB_TILE_ALLOW_SHUTDOWN | FD_TOPOB_TILE_STARTUP );
       fd_topob_wksp( topo, "snapla_ls" );
       fd_topob_wksp( topo, "snapin_ls" );
       fd_topob_wksp( topo, "snapls_ct" );

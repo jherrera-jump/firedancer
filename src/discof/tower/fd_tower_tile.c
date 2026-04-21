@@ -1308,7 +1308,8 @@ init_choreo( void                 * scratch,
 
 
 FD_FN_PURE static inline ulong
-scratch_footprint( fd_topo_tile_t const * tile ) {
+scratch_footprint( fd_topo_t const * topo FD_PARAM_UNUSED,
+                   fd_topo_tile_t const * tile ) {
   ulong slot_max    = fd_ulong_pow2_up( tile->tower.max_live_slots );
   ulong blk_max     = slot_max * EQVOC_MAX;
   ulong fec_max     = slot_max * FD_SHRED_BLK_MAX / FD_FEC_SHRED_CNT;

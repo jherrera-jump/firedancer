@@ -25,6 +25,7 @@ fd_topob_new( void * mem,
   fd_memset( topo, 0, sizeof(fd_topo_t) );
 
   FD_TEST( fd_pod_new( topo->props, sizeof(topo->props) ) );
+  FD_TEST( fd_pod_new( topo->config, sizeof(topo->config) ) );
 
   if( FD_UNLIKELY( strlen( app_name )>=sizeof(topo->app_name) ) ) FD_LOG_ERR(( "app_name too long: %s", app_name ));
   strncpy( topo->app_name, app_name, sizeof(topo->app_name) );
@@ -172,6 +173,7 @@ fd_topob_tile_uses( fd_topo_t *           topo,
 fd_topo_tile_t *
 fd_topob_tile( fd_topo_t *  topo,
                char const * tile_name,
+               ulong        kind_id,
                char const * tile_wksp,
                char const * metrics_wksp,
                ulong        flags ) {
@@ -194,11 +196,6 @@ fd_topob_tile( fd_topo_t *  topo,
   fd_topob_wksp( topo, metrics_wksp );
 
   if( FD_UNLIKELY( topo->tile_cnt>=FD_TOPO_MAX_TILES ) ) FD_LOG_ERR(( "too many tiles %lu", topo->tile_cnt ));
-
-  ulong kind_id = 0UL;
-  for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
-    if( !strcmp( topo->tiles[ i ].name, tile_name ) ) kind_id++;
-  }
 
   /* Idempotent -- return existing tile if (name, kind_id) match */
   ulong existing = fd_topo_find_tile( topo, tile_name, kind_id );
