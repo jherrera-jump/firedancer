@@ -2005,6 +2005,48 @@ test_disjoint_index_clears_retired_txn_backrefs( void ) {
   test_teardown_poc( accdb, fd );
 }
 
+/* A newly-created account normally starts hot.  The hot and cold maps
+   have different bucket counts in production, so publishing the hot
+   slot with the cold bucket number writes beyond the logical hot map
+   and leaves the account unreachable. */
+static void
+test_disjoint_index_new_hot_uses_hot_bucket( void ) {
+  int fd;
+  fd_accdb_t * accdb = test_setup_poc( &fd, 64UL, 8UL, 64UL );
+  fd_accdb_shmem_t * shmem = test_shmem_mem;
+  uint * hot_map = (uint *)((uchar *)shmem+shmem->hot_map_off);
+  fd_accdb_accmeta_t * hot_pool = (fd_accdb_accmeta_t *)((uchar *)shmem+shmem->acc_pool_off);
+
+  /* The tiny fixture normally gives both tiers the same chain count.
+     Narrow the logical hot map to reproduce the production geometry;
+     the backing allocation remains large enough for either value. */
+  FD_TEST( shmem->chain_cnt==32UL );
+  FD_TEST( shmem->hot_chain_cnt==32UL );
+  shmem->hot_chain_cnt = 8UL;
+
+  uchar key[32] = { 0xE4U };
+  while( (fd_hash32( key, shmem->seed ) & (shmem->chain_cnt-1UL))<shmem->hot_chain_cnt ) key[1]++;
+  ulong hot_hash  = fd_hash32( key, shmem->seed ) & (shmem->hot_chain_cnt-1UL);
+  ulong cold_hash = fd_hash32( key, shmem->seed ) & (shmem->chain_cnt-1UL);
+  FD_TEST( hot_hash!=cold_hash );
+
+  fd_accdb_fork_id_t root  = fd_accdb_attach_child( accdb, SENTINEL );
+  fd_accdb_fork_id_t child = fd_accdb_attach_child( accdb, root );
+  accdb_write( accdb, child, key, 42UL, NULL, 0UL, owner3 );
+
+  uint idx = hot_map[ hot_hash ];
+  FD_TEST( idx!=UINT_MAX );
+  FD_TEST( !memcmp( hot_pool[ idx ].key.pubkey, key, 32UL ) );
+  FD_TEST( fd_accdb_lamports( accdb, child, key )==42UL );
+
+  fd_accdb_purge( accdb, child );
+  drain_background( accdb );
+  FD_TEST( fd_accdb_lamports( accdb, root, key )==0UL );
+
+  FD_TEST( !munmap( test_index_mapping, shmem->cold_idx_file_sz ) );
+  test_teardown_poc( accdb, fd );
+}
+
 static void
 test_disjoint_index_rejects_unbacked_dirty_migration( void ) {
   int fd;
@@ -2135,6 +2177,9 @@ main( int     argc,
 
   FD_LOG_NOTICE(( "test_disjoint_index_clears_retired_txn_backrefs ..." ));
   test_disjoint_index_clears_retired_txn_backrefs();
+
+  FD_LOG_NOTICE(( "test_disjoint_index_new_hot_uses_hot_bucket ..." ));
+  test_disjoint_index_new_hot_uses_hot_bucket();
 
   FD_LOG_NOTICE(( "test_disjoint_index_rejects_unbacked_dirty_migration ..." ));
   test_disjoint_index_rejects_unbacked_dirty_migration();

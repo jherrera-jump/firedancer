@@ -349,6 +349,7 @@ index_lookup_acquire( fd_accdb_t *          accdb,
                       uchar const           pubkey[ 32 ],
                       fd_accdb_acc_ref_t *  out_ref,
                       ulong *               out_map_idx,
+                      int *                 out_bundle_hot,
                       uint *                out_seq ) {
   fd_accdb_index_stripe_t * stripe = accdb_index_enabled( accdb ) ? index_stripe( accdb, pubkey ) : NULL;
 
@@ -359,6 +360,7 @@ index_lookup_acquire( fd_accdb_t *          accdb,
     fd_accdb_accmeta_t * result = NULL;
     fd_accdb_acc_ref_t   ref    = FD_ACCDB_ACC_REF_NULL;
     int hot_bundle = 0;
+    int cold_bundle = 0;
     ulong hot_hash = 0UL;
 
     if( stripe ) {
@@ -390,13 +392,15 @@ index_lookup_acquire( fd_accdb_t *          accdb,
         fd_accdb_accmeta_t * candidate = &pool[ cur ];
         uint next = FD_VOLATILE_CONST( candidate->map.next );
         fd_racesan_hook( "accdb_acquire:post_next" );
-        if( (candidate->key.generation<=root_generation ||
-             fd_accdb_acc_fork_id(candidate)==fork_id.val ||
-             descends_set_test( fork->descends, fd_accdb_acc_fork_id(candidate) )) &&
-            !memcmp( pubkey, candidate->key.pubkey, 32UL ) ) {
-          result = candidate;
-          ref    = fd_accdb_acc_ref( cur, 0 );
-          break;
+        if( !memcmp( pubkey, candidate->key.pubkey, 32UL ) ) {
+          cold_bundle = 1;
+          if( candidate->key.generation<=root_generation ||
+              fd_accdb_acc_fork_id(candidate)==fork_id.val ||
+              descends_set_test( fork->descends, fd_accdb_acc_fork_id(candidate) ) ) {
+            result = candidate;
+            ref    = fd_accdb_acc_ref( cur, 0 );
+            break;
+          }
         }
         cur = next;
       }
@@ -409,7 +413,8 @@ index_lookup_acquire( fd_accdb_t *          accdb,
     }
 
     *out_ref     = ref;
-    *out_map_idx = stripe && (result ? fd_accdb_acc_ref_is_hot( ref ) : hot_bundle) ? hot_hash : cold_hash;
+    *out_bundle_hot = stripe ? (hot_bundle ? 1 : (cold_bundle ? 0 : -1)) : 0;
+    *out_map_idx = stripe && hot_bundle ? hot_hash : cold_hash;
     *out_seq     = seq;
     return result;
   }
@@ -2629,6 +2634,7 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
   fd_accdb_acc_ref_t acc_refs[ FD_ACCDB_MAX_ACQUIRE_CNT ];
   fd_accdb_acc_ref_t reserved_refs[ FD_ACCDB_MAX_ACQUIRE_CNT ];
   ulong acc_map_idxs[ FD_ACCDB_MAX_ACQUIRE_CNT ];
+  int index_bundle_hot[ FD_ACCDB_MAX_ACQUIRE_CNT ];
   uint index_seqs[ FD_ACCDB_MAX_ACQUIRE_CNT ];
 
   /* Walk the hash chain for each pubkey and take the first visible
@@ -2651,7 +2657,7 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
   for( ulong i=0UL; i<pubkeys_cnt; i++ ) {
     reserved_refs[ i ] = FD_ACCDB_ACC_REF_NULL;
     accmetas[ i ] = index_lookup_acquire( accdb, fork, fork_id, root_generation, pubkeys[ i ],
-                                          &acc_refs[ i ], &acc_map_idxs[ i ], &index_seqs[ i ] );
+                                          &acc_refs[ i ], &acc_map_idxs[ i ], &index_bundle_hot[ i ], &index_seqs[ i ] );
 
     if( accdb_index_enabled( accdb ) && accmetas[ i ] ) {
       if( fd_accdb_acc_ref_is_hot( acc_refs[ i ] ) ) {
@@ -2677,11 +2683,11 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
     if( FD_UNLIKELY( accmetas[ i ] && !writable[ i ] && !accmetas[ i ]->lamports ) ) accmetas[ i ] = NULL;
 
     if( writable[ i ] && (!accmetas[ i ] || accmetas[ i ]->key.generation!=fork->shmem->generation) ) {
-      int want_hot = accdb_index_enabled( accdb ) ? (accmetas[ i ] ? fd_accdb_acc_ref_is_hot( acc_refs[ i ] )
-                                                                : FD_VOLATILE_CONST( accdb->shmem->hot_used ) < accdb->shmem->hot_max-accdb->shmem->hot_emergency_reserve) : 0;
-      int allow_hot_emergency = !!(accmetas[ i ] && want_hot);
+      int want_hot = accdb_index_enabled( accdb ) ? (index_bundle_hot[ i ]>=0 ? index_bundle_hot[ i ]
+                                                                              : FD_VOLATILE_CONST( accdb->shmem->hot_used ) < accdb->shmem->hot_max-accdb->shmem->hot_emergency_reserve) : 0;
+      int allow_hot_emergency = !!(want_hot && (accmetas[ i ] || index_bundle_hot[ i ]>=0));
       fd_accdb_acc_ref_t ref = acc_ref_acquire( accdb, want_hot, allow_hot_emergency );
-      if( fd_accdb_acc_ref_is_null( ref ) && accdb_index_enabled( accdb ) && !accmetas[ i ] ) {
+      if( fd_accdb_acc_ref_is_null( ref ) && accdb_index_enabled( accdb ) && index_bundle_hot[ i ]<0 ) {
         ref = acc_ref_acquire( accdb, 0, 0 );
         if( !fd_accdb_acc_ref_is_null( ref ) ) acc_map_idxs[ i ] = fd_hash32( pubkeys[ i ], accdb->shmem->seed )&(accdb->shmem->chain_cnt-1UL);
       }
@@ -2691,6 +2697,8 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
         ref = acc_ref_acquire( accdb, want_hot, allow_hot_emergency );
       }
       reserved_refs[ i ] = ref;
+      acc_map_idxs[ i ] = fd_hash32( pubkeys[ i ], accdb->shmem->seed ) &
+                          (acc_ref_chain_cnt( accdb, fd_accdb_acc_ref_is_hot( ref ) )-1UL);
     }
 
     /* Attribute this acquired account to a size class for per-class
@@ -2861,23 +2869,26 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
         FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_retries, 1UL );
 
         accmetas[ i ] = index_lookup_acquire( accdb, fork, fork_id, root_generation, pubkeys[ i ],
-                                              &acc_refs[ i ], &acc_map_idxs[ i ], &index_seqs[ i ] );
+                                              &acc_refs[ i ], &acc_map_idxs[ i ], &index_bundle_hot[ i ], &index_seqs[ i ] );
         if( FD_UNLIKELY( accmetas[ i ] && !writable[ i ] && !accmetas[ i ]->lamports ) ) accmetas[ i ] = NULL;
 
         /* A migration can change the tier after the write slot was
            reserved in step 1.  Replace that reservation so a later
            cross-fork commit remains in the bundle's authoritative tier. */
         if( writable[ i ] && !fd_accdb_acc_ref_is_null( reserved_refs[ i ] ) &&
-            !fd_accdb_acc_ref_is_null( acc_refs[ i ] ) &&
-            fd_accdb_acc_ref_is_hot( reserved_refs[ i ] )!=fd_accdb_acc_ref_is_hot( acc_refs[ i ] ) ) {
+            index_bundle_hot[ i ]>=0 &&
+            fd_accdb_acc_ref_is_hot( reserved_refs[ i ] )!=index_bundle_hot[ i ] ) {
           acc_ref_release( accdb, reserved_refs[ i ] );
-          reserved_refs[ i ] = acc_ref_acquire( accdb, fd_accdb_acc_ref_is_hot( acc_refs[ i ] ), 1 );
+          reserved_refs[ i ] = acc_ref_acquire( accdb, index_bundle_hot[ i ], 1 );
           while( FD_UNLIKELY( fd_accdb_acc_ref_is_null( reserved_refs[ i ] ) ) ) {
             FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_admission_stalls, 1UL );
             FD_SPIN_PAUSE();
-            reserved_refs[ i ] = acc_ref_acquire( accdb, fd_accdb_acc_ref_is_hot( acc_refs[ i ] ), 1 );
+            reserved_refs[ i ] = acc_ref_acquire( accdb, index_bundle_hot[ i ], 1 );
           }
         }
+        if( writable[ i ] && !fd_accdb_acc_ref_is_null( reserved_refs[ i ] ) )
+          acc_map_idxs[ i ] = fd_hash32( pubkeys[ i ], accdb->shmem->seed ) &
+                              (acc_ref_chain_cnt( accdb, fd_accdb_acc_ref_is_hot( reserved_refs[ i ] ) )-1UL);
       }
     }
 
