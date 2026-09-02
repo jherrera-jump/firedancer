@@ -1950,6 +1950,61 @@ test_disjoint_index_poc( void ) {
   test_teardown_poc( accdb, fd );
 }
 
+static void
+test_disjoint_index_clears_retired_txn_backrefs( void ) {
+  int fd;
+  fd_accdb_t * accdb = test_setup_poc( &fd, 64UL, 8UL, 64UL );
+  fd_accdb_shmem_t * shmem = test_shmem_mem;
+  fd_accdb_accmeta_t * cold_pool = test_index_mapping;
+  uint * cold_txn_idx = (uint *)((uchar *)test_index_mapping+shmem->cold_txn_idx_file_off);
+  uint * cold_map = (uint *)((uchar *)shmem+shmem->acc_map_off);
+
+  uchar survivor[32] = { 0xE1U };
+
+  fd_accdb_fork_id_t root = fd_accdb_attach_child( accdb, SENTINEL );
+  fd_accdb_fork_id_t a    = fd_accdb_attach_child( accdb, root );
+  ulong replaced_lamports = 0UL;
+  fd_accdb_snapshot_load_begin( accdb );
+  FD_TEST( fd_accdb_snapshot_write_one( accdb, a, survivor, 1UL, 1UL, 0UL, 0, &replaced_lamports )==1 );
+  fd_accdb_snapshot_load_end( accdb );
+
+  ulong survivor_hash = fd_hash32( survivor, shmem->seed ) & (shmem->chain_cnt-1UL);
+  uint survivor_idx = cold_map[ survivor_hash ];
+  FD_TEST( survivor_idx!=UINT_MAX );
+  FD_TEST( !memcmp( cold_pool[ survivor_idx ].key.pubkey, survivor, 32UL ) );
+  FD_TEST( cold_txn_idx[ survivor_idx ] );
+
+  fd_accdb_advance_root( accdb, a );
+  drain_background( accdb );
+  fd_accdb_fork_id_t b = fd_accdb_attach_child( accdb, a );
+  fd_accdb_advance_root( accdb, b );
+  drain_background( accdb );
+
+  /* Rooting B releases A's txn record while keeping survivor live.
+     The sidecar must stop naming that released txn slot before the
+     pool can recycle it for another fork. */
+  FD_TEST( cold_txn_idx[ survivor_idx ]==0U );
+
+  uchar victim[32] = { 0xE2U };
+  fd_accdb_fork_id_t c = fd_accdb_attach_child( accdb, b );
+  accdb_write( accdb, c, victim, 2UL, NULL, 0UL, owner3 );
+
+  uchar const * keys[1] = { survivor };
+  FD_TEST( fd_accdb_prefetch( accdb, 1UL, keys )==1UL );
+  int charge_busy = 0;
+  fd_accdb_background( accdb, &charge_busy );
+  FD_TEST( charge_busy );
+
+  /* Promotion must not rewrite C's recycled txn slot.  Purging C
+     removes victim while leaving the rooted survivor authoritative. */
+  fd_accdb_purge( accdb, c );
+  drain_background( accdb );
+  FD_TEST( fd_accdb_lamports( accdb, b, survivor )==1UL );
+  FD_TEST( fd_accdb_lamports( accdb, b, victim   )==0UL );
+
+  test_teardown_poc( accdb, fd );
+}
+
 int
 main( int     argc,
       char ** argv ) {
@@ -2014,6 +2069,9 @@ main( int     argc,
 
   FD_LOG_NOTICE(( "test_disjoint_index_poc ..." ));
   test_disjoint_index_poc();
+
+  FD_LOG_NOTICE(( "test_disjoint_index_clears_retired_txn_backrefs ..." ));
+  test_disjoint_index_clears_retired_txn_backrefs();
 
   FD_LOG_NOTICE(( "test_acquire_b_refund_accounting ..." ));
   test_acquire_b_refund_accounting();

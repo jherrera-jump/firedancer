@@ -186,6 +186,20 @@ acc_ref_txn_slot( fd_accdb_t *       accdb,
   return fd_accdb_acc_ref_is_hot( ref ) ? &accdb->hot_txn_idx[ idx ] : &accdb->cold_txn_idx[ idx ];
 }
 
+/* Drop the reverse link before returning a txn slot to txn_pool.  A
+   rooted account can outlive the fork txn record that originally
+   published it.  Leaving that account's sidecar pointed at the freed
+   txn slot lets a later migration overwrite an unrelated txn after the
+   slot is recycled, corrupting purge/advance_root's account reference. */
+static inline void
+acc_ref_txn_clear( fd_accdb_t *       accdb,
+                   fd_accdb_acc_ref_t ref,
+                   uint               txn_idx ) {
+  if( FD_LIKELY( !accdb_index_enabled( accdb ) ) ) return;
+  uint * slot = acc_ref_txn_slot( accdb, ref );
+  if( FD_LIKELY( FD_VOLATILE_CONST( *slot )==txn_idx+1U ) ) FD_VOLATILE( *slot ) = 0U;
+}
+
 static __attribute__((unused)) fd_accdb_acc_ref_t
 cold_pool_acquire( fd_accdb_t * accdb ) {
   fd_accdb_shmem_t * shmem = accdb->shmem;
@@ -1668,6 +1682,7 @@ purge_inner( fd_accdb_t *              accdb,
     fd_accdb_txn_t * txn_head = txn_pool_ele( accdb->txn_pool, (ulong)txn );
     fd_accdb_txn_t * txn_tail = NULL;
     while( txn!=UINT_MAX ) {
+      uint txn_idx = txn;
       fd_accdb_txn_t * txne = txn_pool_ele( accdb->txn_pool, (ulong)txn );
 
       fd_accdb_acc_ref_t acc_ref = txne->acc_pool_idx;
@@ -1688,6 +1703,7 @@ purge_inner( fd_accdb_t *              accdb,
       fd_racesan_hook( "accdb_purge:pre_unlink" );
       acc_unlink( accdb, acc_map_idx, prev, acc_ref );
       deferred_acc_append( accdb, acc_ref );
+      acc_ref_txn_clear( accdb, acc_ref, txn_idx );
 
       txn_tail = txne;
       txn = txne->fork.next;
@@ -1751,6 +1767,7 @@ background_advance_root( fd_accdb_t *       accdb,
     fd_accdb_txn_t * txn_head = txn_pool_ele( accdb->txn_pool, (ulong)txn );
     fd_accdb_txn_t * txn_tail = NULL;
     while( txn!=UINT_MAX ) {
+      uint txn_idx = txn;
       fd_accdb_txn_t * txne = txn_pool_ele( accdb->txn_pool, (ulong)txn );
 
       fd_accdb_acc_ref_t new_ref = txne->acc_pool_idx;
@@ -1808,6 +1825,8 @@ background_advance_root( fd_accdb_t *       accdb,
         deferred_acc_append( accdb, new_ref );
       }
 
+      acc_ref_txn_clear( accdb, new_ref, txn_idx );
+
       txn_tail = txne;
       txn = txne->fork.next;
     }
@@ -1819,7 +1838,9 @@ background_advance_root( fd_accdb_t *       accdb,
     fd_accdb_txn_t * parent_head = txn_pool_ele( accdb->txn_pool, (ulong)parent_txn );
     fd_accdb_txn_t * parent_tail = NULL;
     while( parent_txn!=UINT_MAX ) {
+      uint txn_idx = parent_txn;
       fd_accdb_txn_t * t = txn_pool_ele( accdb->txn_pool, (ulong)parent_txn );
+      acc_ref_txn_clear( accdb, t->acc_pool_idx, txn_idx );
       parent_tail = t;
       parent_txn = t->fork.next;
     }
