@@ -2089,7 +2089,7 @@ test_disjoint_index_writer_blocks_migration( void ) {
   pending[0].commit = 1;
 
   fd_accdb_index_stripe_t * stripe = &shmem->index_stripe[ hash & (FD_ACCDB_INDEX_STRIPE_CNT-1UL) ];
-  FD_TEST( stripe->writers==1U );
+  FD_TEST( stripe->active_acquires==1U );
   ulong promotions_before = shmem->shmetrics->index_promotions;
   ulong blocked_before = shmem->shmetrics->index_blocked_migrations;
   FD_TEST( fd_accdb_prefetch( accdb, 1UL, keys )==1UL );
@@ -2101,7 +2101,7 @@ test_disjoint_index_writer_blocks_migration( void ) {
   FD_TEST( hot_map[ hot_hash ]==UINT_MAX );
 
   fd_accdb_release( accdb, 1UL, pending );
-  FD_TEST( stripe->writers==0U );
+  FD_TEST( stripe->active_acquires==0U );
   FD_TEST( fd_accdb_prefetch( accdb, 1UL, keys )==1UL );
   charge_busy = 0;
   fd_accdb_background( accdb, &charge_busy );
@@ -2114,6 +2114,90 @@ test_disjoint_index_writer_blocks_migration( void ) {
     versions += !memcmp( hot_pool[ idx ].key.pubkey, key, 32UL );
   FD_TEST( versions==2UL );
   FD_TEST( fd_accdb_lamports( accdb, child, key )==20UL );
+
+  FD_TEST( !munmap( test_index_mapping, shmem->cold_idx_file_sz ) );
+  test_teardown_poc( accdb, fd );
+}
+
+/* A writable account reserves one destination in every cache class.  If
+   that allocation evicts a dirty cache line belonging to a later input in
+   the same acquire, eviction retains CACHE_CLAIM until the batched
+   writeback in acquire STEP 10.  The later input must already be pinned;
+   otherwise its cold-load waits for a claim that this acquire itself owns
+   and can never reach STEP 10 to release. */
+static void
+test_disjoint_index_same_batch_dirty_eviction( void ) {
+  int fd;
+  fd_accdb_t * accdb = test_setup_poc( &fd, 64UL, 8UL, 64UL );
+  fd_accdb_shmem_t * shmem = test_shmem_mem;
+  uint * hot_map = (uint *)((uchar *)shmem+shmem->hot_map_off);
+  fd_accdb_accmeta_t * hot_pool = (fd_accdb_accmeta_t *)((uchar *)shmem+shmem->acc_pool_off);
+
+  fd_accdb_fork_id_t root = fd_accdb_attach_child( accdb, SENTINEL );
+  uchar key_a[32] = { 0xA1U };
+  uchar key_b[32] = { 0xB1U };
+  uchar key_c[32] = { 0xC1U };
+  static uchar data_b[ 256UL<<10 ];
+  static uchar data_c[ 256UL<<10 ];
+  fd_memset( data_b, 0xB2, sizeof(data_b) );
+  fd_memset( data_c, 0xC2, sizeof(data_c) );
+
+  accdb_write( accdb, root, key_b, 101UL, data_b, sizeof(data_b), owner2 );
+  accdb_write( accdb, root, key_c, 202UL, data_c, sizeof(data_c), owner3 );
+
+  ulong b_hash = fd_hash32( key_b, shmem->seed ) & (shmem->hot_chain_cnt-1UL);
+  ulong c_hash = fd_hash32( key_c, shmem->seed ) & (shmem->hot_chain_cnt-1UL);
+  uint b_idx = hot_map[ b_hash ];
+  uint c_idx = hot_map[ c_hash ];
+  while( b_idx!=UINT_MAX && memcmp( hot_pool[ b_idx ].key.pubkey, key_b, 32UL ) ) b_idx = hot_pool[ b_idx ].map.next;
+  while( c_idx!=UINT_MAX && memcmp( hot_pool[ c_idx ].key.pubkey, key_c, 32UL ) ) c_idx = hot_pool[ c_idx ].map.next;
+  FD_TEST( b_idx!=UINT_MAX && c_idx!=UINT_MAX );
+
+  uint b_cidx = hot_pool[ b_idx ].cache_idx;
+  uint c_cidx = hot_pool[ c_idx ].cache_idx;
+  FD_TEST( FD_ACCDB_SIZE_CACHE_VALID( hot_pool[ b_idx ].executable_size ) );
+  FD_TEST( FD_ACCDB_SIZE_CACHE_VALID( hot_pool[ c_idx ].executable_size ) );
+  FD_TEST( FD_ACCDB_ACC_CIDX_CLASS( b_cidx )==6UL );
+  FD_TEST( FD_ACCDB_ACC_CIDX_CLASS( c_cidx )==6UL );
+
+  ulong b_line_idx = FD_ACCDB_ACC_CIDX_IDX( b_cidx );
+  ulong c_line_idx = FD_ACCDB_ACC_CIDX_IDX( c_cidx );
+  fd_accdb_cache_line_t * b_line = (fd_accdb_cache_line_t *)((uchar *)shmem + shmem->cache_region_off[ 6UL ] +
+                                                             b_line_idx*fd_accdb_cache_slot_sz[ 6UL ]);
+  fd_accdb_cache_line_t * c_line = (fd_accdb_cache_line_t *)((uchar *)shmem + shmem->cache_region_off[ 6UL ] +
+                                                             c_line_idx*fd_accdb_cache_slot_sz[ 6UL ]);
+  FD_TEST( b_line_idx!=c_line_idx );
+  FD_TEST( !b_line->persisted && !c_line->persisted );
+
+  /* Force the next class-6 allocation through CLOCK and point the hand at
+     B.  The fixed acquire pins B in its all-input pre-pass, so CLOCK must
+     skip B and evict C instead.  Before the fix, account A's destination
+     allocation evicted B and the subsequent acquire of B spun forever on
+     its own retained claim. */
+  b_line->referenced = 0;
+  c_line->referenced = 0;
+  shmem->cache_free[ 6UL ].ver_top = (ulong)UINT_MAX;
+  shmem->cache_free_cnt[ 6UL ].val = 0UL;
+  shmem->cache_class_init[ 6UL ].val = shmem->cache_class_max[ 6UL ];
+  shmem->clock_hand[ 6UL ].val = b_line_idx;
+
+  uchar const * keys[2] = { key_a, key_b };
+  int writable[2] = { 1, 0 };
+  fd_acc_t accs[2];
+  fd_memset( accs, 0, sizeof(accs) );
+  fd_accdb_acquire( accdb, root, 2UL, keys, writable, accs );
+  FD_TEST( accs[1].lamports==101UL );
+  FD_TEST( accs[1].data_len==sizeof(data_b) );
+  FD_TEST( accs[1].data[0]==0xB2 && accs[1].data[sizeof(data_b)-1UL]==0xB2 );
+  FD_TEST( !(hot_pool[ b_idx ].executable_size & FD_ACCDB_SIZE_CACHE_CLAIM_BIT) );
+  fd_accdb_release( accdb, 2UL, accs );
+
+  ulong lamports = 0UL;
+  ulong data_len = 0UL;
+  uchar byte[ sizeof(data_c) ];
+  FD_TEST( accdb_read( accdb, root, key_c, &lamports, byte, &data_len, NULL ) );
+  FD_TEST( lamports==202UL && data_len==sizeof(data_c) );
+  FD_TEST( byte[0]==0xC2 && byte[sizeof(byte)-1UL]==0xC2 );
 
   FD_TEST( !munmap( test_index_mapping, shmem->cold_idx_file_sz ) );
   test_teardown_poc( accdb, fd );
@@ -2255,6 +2339,9 @@ main( int     argc,
 
   FD_LOG_NOTICE(( "test_disjoint_index_writer_blocks_migration ..." ));
   test_disjoint_index_writer_blocks_migration();
+
+  FD_LOG_NOTICE(( "test_disjoint_index_same_batch_dirty_eviction ..." ));
+  test_disjoint_index_same_batch_dirty_eviction();
 
   FD_LOG_NOTICE(( "test_disjoint_index_rejects_unbacked_dirty_migration ..." ));
   test_disjoint_index_rejects_unbacked_dirty_migration();

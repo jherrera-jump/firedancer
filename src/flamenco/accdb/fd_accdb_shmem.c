@@ -465,7 +465,7 @@ fd_accdb_shmem_new_ex( void * shmem,
   for( ulong i=0UL; i<FD_ACCDB_INDEX_STRIPE_CNT; i++ ) {
     accdb->index_stripe[ i ].lock = 0U;
     accdb->index_stripe[ i ].seq  = 0U;
-    accdb->index_stripe[ i ].writers = 0U;
+    accdb->index_stripe[ i ].active_acquires = 0U;
   }
   accdb->prefetch_lock = 0;
   accdb->prefetch_head = 0U;

@@ -699,7 +699,7 @@ fd_accdb_reset( fd_accdb_t * accdb ) {
     for( ulong i=0UL; i<FD_ACCDB_INDEX_STRIPE_CNT; i++ ) {
       shmem->index_stripe[ i ].lock = 0U;
       shmem->index_stripe[ i ].seq  = 0U;
-      shmem->index_stripe[ i ].writers = 0U;
+      shmem->index_stripe[ i ].active_acquires = 0U;
     }
     fd_memset( accdb->hot_map, 0xFF, shmem->hot_chain_cnt*sizeof(uint) );
     fd_memset( accdb->hot_txn_idx, 0, shmem->hot_max*sizeof(uint) );
@@ -2843,16 +2843,20 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
   }
 
   // STEP 4.
-  //   For any accounts that are not in cache, we now need to actually
-  //   retrieve the cache pointers from our structures.  Space has been
-  //   reserved already, so this step is guaranteed to succeed, and is
-  //   just pulling the cache lines out of the free lists and marking
-  //   them as in-use.
+  //   Reserve each account's index stripe against migration, pin every
+  //   cache-resident input, cold-load the remaining inputs, and only then
+  //   allocate writable destination lines.
   //
-  //   This step is fully lock-free.  Cache hits are pinned with an
-  //   atomic CAS on refcnt (cache_try_pin).  Eviction uses the CLOCK
-  //   algorithm.  The CAS free list provides immediate recycling of
-  //   fully-freed lines.
+  //   The ordering is important.  Dirty CLOCK eviction retains the
+  //   victim account's CACHE_CLAIM until STEP 10 publishes its replacement
+  //   disk offset.  If destination allocation for account i evicts a later
+  //   input account j before j is pinned, j's cold-load would wait on a
+  //   claim that this same acquire cannot clear until after the loop: a
+  //   self-deadlock.  Pinning all resident inputs before any allocation
+  //   makes them ineligible for CLOCK.  Migration is excluded by
+  //   active_acquires rather than by holding the stripe lock across cache
+  //   allocation, so waiting for a claim can never participate in a
+  //   stripe/claim lock cycle with another acquire.
 
   int exists_in_cache[ FD_ACCDB_MAX_ACQUIRE_CNT ];
   fd_accdb_cache_line_t * original_cache_line[ FD_ACCDB_MAX_ACQUIRE_CNT ];
@@ -2866,6 +2870,11 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
   uint evicted_dest_acc[ FD_ACCDB_MAX_ACQUIRE_CNT ][ FD_ACCDB_CACHE_CLASS_CNT ];
   uint evicted_orig_acc[ FD_ACCDB_MAX_ACQUIRE_CNT ];
 
+  /* Validate the lookup result and reserve the pubkey bundle against
+     migration for the lifetime of the acquire.  Do not hold the stripe
+     while touching the cache: CLOCK eviction can retain a claim until
+     later in this function and may target an account whose stripe is
+     held by another acquire. */
   for( ulong i=0UL; i<pubkeys_cnt; i++ ) {
     if( FD_UNLIKELY( !accmetas[ i ] && !writable[ i ] ) ) continue;
 
@@ -2899,9 +2908,18 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
           acc_map_idxs[ i ] = fd_hash32( pubkeys[ i ], accdb->shmem->seed ) &
                               (acc_ref_chain_cnt( accdb, fd_accdb_acc_ref_is_hot( reserved_refs[ i ] ) )-1UL);
       }
+      if( FD_LIKELY( accmetas[ i ] || writable[ i ] ) ) stripe->active_acquires++;
+      spin_lock_release( (int *)&stripe->lock );
     }
+  }
 
+  /* First pin every cache-resident input.  No cache allocation is allowed
+     before this pass completes, otherwise an earlier input can evict a
+     later dirty input and retain its claim until STEP 10. */
+  for( ulong i=0UL; i<pubkeys_cnt; i++ ) {
     original_cache_line[ i ] = NULL;
+    exists_in_cache[ i ]     = 0;
+    evicted_orig_acc[ i ]    = UINT_MAX;
     if( FD_LIKELY( accmetas[ i ] ) ) {
       if( FD_LIKELY( FD_ACCDB_SIZE_CACHE_VALID( FD_VOLATILE_CONST( accmetas[ i ]->executable_size ) ) ) ) {
         /* Concurrent evict_clear_acc_cache_ref clears VALID then stores
@@ -2927,20 +2945,21 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
       }
     }
     exists_in_cache[ i ] = original_cache_line[ i ]!=NULL;
+  }
 
+  /* Cold-load only after all resident inputs are pinned.  A foreign dirty
+     eviction claim may make this spin briefly, but no stripe lock is held
+     and the claim owner is therefore always able to make progress. */
+  for( ulong i=0UL; i<pubkeys_cnt; i++ ) {
     if( FD_UNLIKELY( accmetas[ i ] && !original_cache_line[ i ] ) ) {
       original_cache_line[ i ] = cold_load_acc( accdb, accmetas[ i ], pubkeys[ i ], &exists_in_cache[ i ], &evicted_orig_acc[ i ] );
     }
+  }
 
-    /* Once the selected version's cache line is pinned, migration will
-       defer on its non-zero refcount.  The pin remains held until
-       release, so the tagged reference cannot become stale while the
-       caller executes. */
-    if( stripe ) {
-      if( writable[ i ] ) stripe->writers++;
-      spin_lock_release( (int *)&stripe->lock );
-    }
-
+  /* Finally allocate writable scratch destinations.  All input lines are
+     now pinned, so CLOCK cannot select another account from this acquire
+     as a dirty victim. */
+  for( ulong i=0UL; i<pubkeys_cnt; i++ ) {
     if( FD_UNLIKELY( writable[ i ] ) ) {
       for( ulong j=0UL; j<FD_ACCDB_CACHE_CLASS_CNT; j++ ) destination_cache_lines[ i ][ j ] = acquire_cache_line( accdb, j, &evicted_dest_acc[ i ][ j ] );
     }
@@ -3568,14 +3587,15 @@ release_inner( fd_accdb_t * accdb,
   for( ulong i=0UL; i<accs_cnt; i++ ) {
     if( FD_UNLIKELY( accs[ i ]._original_size_class==ULONG_MAX && !accs[ i ]._writable ) ) continue;
 
-    /* A writable acquire reserves this stripe until release.  Taking
-       the stripe before dropping the original cache pin closes the
-       last window where migration could move the existing bundle to
-       the other tier while this write still owns a slot in the old
-       tier. */
-    fd_accdb_index_stripe_t * stripe = accdb_index_enabled( accdb ) && accs[ i ]._writable
-                                       ? index_stripe( accdb, accs[ i ].pubkey ) : NULL;
-    if( stripe ) index_stripe_lock( stripe );
+    /* Every non-empty acquire reserves this stripe until release.  Taking
+       the stripe before dropping the original cache pin closes the last
+       window where migration could move the bundle while this handle
+       still references its metadata or cache line. */
+    fd_accdb_index_stripe_t * stripe = accdb_index_enabled( accdb ) ? index_stripe( accdb, accs[ i ].pubkey ) : NULL;
+    if( stripe ) {
+      if( accs[ i ]._writable ) index_stripe_lock( stripe );
+      else                      spin_lock_acquire( (int *)&stripe->lock );
+    }
 
     ulong original_size_class = accs[ i ]._original_size_class;
     fd_accdb_cache_line_t * original_cache_line = accs[ i ]._original_cache_idx==ULONG_MAX ? NULL : cache_line( accdb, original_size_class, accs[ i ]._original_cache_idx );
@@ -3602,6 +3622,11 @@ release_inner( fd_accdb_t * accdb,
       FD_TEST( original_cache_line );
 #endif
       original_cache_line->referenced = 1;
+      if( stripe ) {
+        FD_TEST( stripe->active_acquires );
+        stripe->active_acquires--;
+        spin_lock_release( (int *)&stripe->lock );
+      }
       continue;
     }
 
@@ -3634,8 +3659,8 @@ release_inner( fd_accdb_t * accdb,
       }
       if( !fd_accdb_acc_ref_is_null( accs[ i ]._reserved_acc_ref ) ) acc_ref_release( accdb, accs[ i ]._reserved_acc_ref );
       if( stripe ) {
-        FD_TEST( stripe->writers );
-        stripe->writers--;
+        FD_TEST( stripe->active_acquires );
+        stripe->active_acquires--;
         index_stripe_unlock( stripe );
       }
       continue;
@@ -3933,8 +3958,8 @@ release_inner( fd_accdb_t * accdb,
     }
 
     if( stripe ) {
-      FD_TEST( stripe->writers );
-      stripe->writers--;
+      FD_TEST( stripe->active_acquires );
+      stripe->active_acquires--;
       index_stripe_unlock( stripe );
     }
   }
@@ -4911,7 +4936,7 @@ index_migrate_bundle( fd_accdb_t * accdb,
   fd_accdb_acc_ref_t dst_check[ max_versions ];
   ulong check_cnt = index_collect_bundle( accdb, src_hot, pubkey, check, max_versions );
   ulong dst_cnt   = index_collect_bundle( accdb, dst_hot, pubkey, dst_check, max_versions );
-  int valid = !stripe->writers && check_cnt==cnt && !dst_cnt;
+  int valid = !stripe->active_acquires && check_cnt==cnt && !dst_cnt;
   for( ulong i=0UL; valid && i<cnt; i++ ) valid &= check[ i ]==src[ i ];
 
   /* Re-copy while publication is excluded.  The optimistic copy above
