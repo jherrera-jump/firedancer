@@ -1242,10 +1242,11 @@ fd_accdb_attach_child( fd_accdb_t *       accdb,
    different line (e.g. by a previous cold_load_acc completing before
    we arrived). */
 
-static inline void
+static inline int
 evict_clear_acc_cache_ref( fd_accdb_accmeta_t * accmeta,
                            ulong                size_class,
-                           ulong                line_idx ) {
+                           ulong                line_idx,
+                           int                  retain_claim ) {
   uint expected_cidx = FD_ACCDB_ACC_CIDX_PACK( (uint)size_class, (uint)line_idx );
 
   /* CAS-acquire CLAIM.  If a cold-loader already holds CLAIM, they
@@ -1253,7 +1254,7 @@ evict_clear_acc_cache_ref( fd_accdb_accmeta_t * accmeta,
      republish is repointing accmeta->cache_idx away from our line). */
   for(;;) {
     uint cur = FD_VOLATILE_CONST( accmeta->executable_size );
-    if( FD_UNLIKELY( cur & FD_ACCDB_SIZE_CACHE_CLAIM_BIT ) ) return;
+    if( FD_UNLIKELY( cur & FD_ACCDB_SIZE_CACHE_CLAIM_BIT ) ) return 0;
     uint nxt = cur | FD_ACCDB_SIZE_CACHE_CLAIM_BIT;
     if( FD_LIKELY( FD_ATOMIC_CAS( &accmeta->executable_size, cur, nxt )==cur ) ) break;
     fd_racesan_hook( "accdb_evict_clear:claim_wait" );
@@ -1265,13 +1266,19 @@ evict_clear_acc_cache_ref( fd_accdb_accmeta_t * accmeta,
   /* CLAIM held.  If accmeta->cache_idx still points at our line, clear
      VALID and INVAL the cache_idx.  Otherwise the accmeta was already
      re-published into a different line; leave it alone. */
-  if( FD_LIKELY( FD_VOLATILE_CONST( accmeta->cache_idx )==expected_cidx ) ) {
+  int matched = FD_VOLATILE_CONST( accmeta->cache_idx )==expected_cidx;
+  if( FD_LIKELY( matched ) ) {
     FD_ATOMIC_FETCH_AND_AND( &accmeta->executable_size, ~FD_ACCDB_SIZE_CACHE_VALID_BIT );
     FD_VOLATILE( accmeta->cache_idx ) = FD_ACCDB_ACC_CIDX_INVAL;
   }
 
-  /* Release CLAIM. */
-  FD_ATOMIC_FETCH_AND_AND( &accmeta->executable_size, ~FD_ACCDB_SIZE_CACHE_CLAIM_BIT );
+  /* A dirty eviction retains CLAIM until its replacement disk offset is
+     published.  This closes the interval where migration could otherwise
+     copy an unbound FD_ACCDB_OFF_INVAL (or an old offset that the evictor
+     is about to free) into the destination tier. */
+  if( FD_LIKELY( !retain_claim || !matched ) )
+    FD_ATOMIC_FETCH_AND_AND( &accmeta->executable_size, ~FD_ACCDB_SIZE_CACHE_CLAIM_BIT );
+  return matched;
 }
 
 /* cache_free_push pushes a fully-freed cache line onto the per-class
@@ -2015,7 +2022,11 @@ acquire_cache_line( fd_accdb_t * accdb,
     fd_racesan_hook( "clock_evict:post_sentinel" );
 
     if( FD_LIKELY( line->acc_idx!=UINT_MAX ) ) {
-      evict_clear_acc_cache_ref( acc_ref_meta( accdb, line->acc_idx ), size_class, hand );
+      int dirty = !line->persisted;
+      if( FD_UNLIKELY( !evict_clear_acc_cache_ref( acc_ref_meta( accdb, line->acc_idx ), size_class, hand, dirty ) ) ) {
+        FD_VOLATILE( line->refcnt ) = 0U;
+        continue;
+      }
     }
     *out_evicted_acc_idx    = line->persisted ? UINT_MAX : line->acc_idx;
     line->key.generation    = UINT_MAX;
@@ -3255,6 +3266,7 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
   for( int k=0; k<pending_cnt; k++ ) {
     pending_accs[ k ]->offset_fork = fd_accdb_acc_pack_offset_fork( pending_offs[ k ], fd_accdb_acc_fork_id(pending_accs[ k ]) );
     pending_lines[ k ]->persisted = 1;
+    FD_ATOMIC_FETCH_AND_AND( &pending_accs[ k ]->executable_size, ~FD_ACCDB_SIZE_CACHE_CLAIM_BIT );
   }
 
   // STEP 11.
@@ -3627,7 +3639,7 @@ release_inner( fd_accdb_t * accdb,
            acc.cache_idx pointing at a line that has been recycled to
            another acc.  evict_clear_acc_cache_ref uses the CLAIM
            protocol to serialize with cold_load_acc. */
-        evict_clear_acc_cache_ref( acc_ref_meta( accdb, original_acc_idx ), original_size_class, accs[ i ]._original_cache_idx );
+        (void)evict_clear_acc_cache_ref( acc_ref_meta( accdb, original_acc_idx ), original_size_class, accs[ i ]._original_cache_idx, 0 );
 
         /* Convert our own pin directly into the eviction claim
            (CAS refcnt 1 -> EVICT_SENTINEL) so refcnt never passes
@@ -3696,7 +3708,7 @@ release_inner( fd_accdb_t * accdb,
              protocol to serialize with cold_load_acc.  See the
              size_class==7 path above for the refcnt claim and
              persisted rationale. */
-          evict_clear_acc_cache_ref( acc_ref_meta( accdb, original_acc_idx ), original_size_class, accs[ i ]._original_cache_idx );
+          (void)evict_clear_acc_cache_ref( acc_ref_meta( accdb, original_acc_idx ), original_size_class, accs[ i ]._original_cache_idx, 0 );
           original_cache_line->persisted = 1;
           fd_racesan_hook( "accdb_release:pre_discard_claim" );
           if( FD_LIKELY( FD_ATOMIC_CAS( &original_cache_line->refcnt, 1U, FD_ACCDB_EVICT_SENTINEL )==1U ) ) {
@@ -4339,8 +4351,12 @@ background_preevict( fd_accdb_t * accdb,
 #if FD_TMPL_USE_HANDHOLDING
       uint line_gen FD_FN_UNUSED = line->key.generation;
 #endif
+      int dirty = !line->persisted && acc_idx!=UINT_MAX;
       if( FD_LIKELY( acc_idx!=UINT_MAX ) ) {
-        evict_clear_acc_cache_ref( acc_ref_meta( accdb, acc_idx ), c, hand );
+        if( FD_UNLIKELY( !evict_clear_acc_cache_ref( acc_ref_meta( accdb, acc_idx ), c, hand, dirty ) ) ) {
+          FD_VOLATILE( line->refcnt ) = 0U;
+          continue;
+        }
       }
       line->key.generation = UINT_MAX;
       if( FD_UNLIKELY( !line->persisted && acc_idx!=UINT_MAX ) ) {
@@ -4407,6 +4423,9 @@ background_preevict( fd_accdb_t * accdb,
         FD_COMPILER_MFENCE();
         accmeta->offset_fork = fd_accdb_acc_pack_offset_fork( file_off, fd_accdb_acc_fork_id(accmeta) );
         FD_ATOMIC_FETCH_AND_ADD( &shmem->shmetrics->disk_used_bytes, entry_sz );
+
+        line->persisted = 1;
+        FD_ATOMIC_FETCH_AND_AND( &accmeta->executable_size, ~FD_ACCDB_SIZE_CACHE_CLAIM_BIT );
 
         accdb->metrics->accounts_preevicted++;
         accdb->metrics->accounts_preevicted_per_class[ c ]++;
@@ -4872,18 +4891,26 @@ index_migrate_bundle( fd_accdb_t * accdb,
       if( !FD_ACCDB_SIZE_CACHE_VALID( es ) ) {
         dm->cache_idx = FD_ACCDB_ACC_CIDX_INVAL;
         dm->executable_size = es & ~FD_ACCDB_SIZE_CACHE_CLAIM_BIT;
+        /* An invalid offset is only readable through its dirty cache
+           line.  Publishing it without that line would leave the
+           destination permanently unreadable.  A dirty evictor retains
+           CACHE_CLAIM until it publishes the replacement offset, so
+           this also rejects the writeback-in-progress window. */
+        if( FD_UNLIKELY( fd_accdb_acc_offset( sm )==FD_ACCDB_OFF_INVAL ) ) { valid=0; break; }
         continue;
       }
       uint cidx = FD_VOLATILE_CONST( sm->cache_idx );
       if( cidx==FD_ACCDB_ACC_CIDX_INVAL ) {
         dm->cache_idx = FD_ACCDB_ACC_CIDX_INVAL;
         dm->executable_size = es & ~(FD_ACCDB_SIZE_CACHE_VALID_BIT|FD_ACCDB_SIZE_CACHE_CLAIM_BIT);
+        if( FD_UNLIKELY( fd_accdb_acc_offset( sm )==FD_ACCDB_OFF_INVAL ) ) { valid=0; break; }
         continue;
       }
       fd_accdb_cache_line_t * line = cache_line( accdb, FD_ACCDB_ACC_CIDX_CLASS(cidx), FD_ACCDB_ACC_CIDX_IDX(cidx) );
       if( line->acc_idx!=src[ i ] || line->key.generation!=sm->key.generation || memcmp( line->key.pubkey, pubkey, 32UL ) ) {
         dm->cache_idx = FD_ACCDB_ACC_CIDX_INVAL;
         dm->executable_size &= ~FD_ACCDB_SIZE_CACHE_VALID_BIT;
+        if( FD_UNLIKELY( fd_accdb_acc_offset( sm )==FD_ACCDB_OFF_INVAL ) ) { valid=0; break; }
         continue;
       }
       if( FD_UNLIKELY( FD_ATOMIC_CAS( &line->refcnt, 0U, FD_ACCDB_EVICT_SENTINEL )!=0U ) ) { valid=0; break; }
@@ -5231,7 +5258,11 @@ fd_accdb_debug_clock_evict_line( fd_accdb_t * accdb,
 
   uint acc_idx = line->acc_idx;
   if( FD_LIKELY( acc_idx!=UINT_MAX ) ) {
-    evict_clear_acc_cache_ref( acc_ref_meta( accdb, acc_idx ), size_class, line_idx );
+    int dirty = !line->persisted;
+    if( FD_UNLIKELY( !evict_clear_acc_cache_ref( acc_ref_meta( accdb, acc_idx ), size_class, line_idx, dirty ) ) ) {
+      FD_VOLATILE( line->refcnt ) = 0U;
+      return UINT_MAX;
+    }
   }
   uint evicted_acc_idx = line->persisted ? UINT_MAX : acc_idx;
   line->key.generation = UINT_MAX;
@@ -5277,6 +5308,8 @@ fd_accdb_debug_clock_evict_line( fd_accdb_t * accdb,
     FD_COMPILER_MFENCE();
     accmeta->offset_fork = fd_accdb_acc_pack_offset_fork( file_off, fd_accdb_acc_fork_id(accmeta) );
     FD_ATOMIC_FETCH_AND_ADD( &shmem->shmetrics->disk_used_bytes, entry_sz );
+    line->persisted = 1;
+    FD_ATOMIC_FETCH_AND_AND( &accmeta->executable_size, ~FD_ACCDB_SIZE_CACHE_CLAIM_BIT );
   }
 
   line->persisted      = 1;

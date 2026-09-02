@@ -2005,6 +2005,69 @@ test_disjoint_index_clears_retired_txn_backrefs( void ) {
   test_teardown_poc( accdb, fd );
 }
 
+static void
+test_disjoint_index_rejects_unbacked_dirty_migration( void ) {
+  int fd;
+  fd_accdb_t * accdb = test_setup_poc( &fd, 64UL, 8UL, 64UL );
+  fd_accdb_shmem_t * shmem = test_shmem_mem;
+  fd_accdb_accmeta_t * cold_pool = test_index_mapping;
+  uint * cold_map = (uint *)((uchar *)shmem+shmem->acc_map_off);
+  uint * hot_map  = (uint *)((uchar *)shmem+shmem->hot_map_off);
+  fd_accdb_accmeta_t * hot_pool = (fd_accdb_accmeta_t *)((uchar *)shmem+shmem->acc_pool_off);
+
+  uchar key[32] = { 0xE3U };
+  ulong replaced_lamports = 0UL;
+  fd_accdb_fork_id_t root = fd_accdb_attach_child( accdb, SENTINEL );
+
+  fd_accdb_snapshot_load_begin( accdb );
+  FD_TEST( fd_accdb_snapshot_write_one( accdb, SENTINEL, key, 10UL, 10UL, 0UL, 0, &replaced_lamports )==1 );
+  ulong cold_hash = fd_hash32( key, shmem->seed ) & (shmem->chain_cnt-1UL);
+  uint root_idx = cold_map[ cold_hash ];
+  FD_TEST( root_idx!=UINT_MAX );
+  fd_accdb_disk_meta_t root_disk = {0};
+  fd_memcpy( root_disk.pubkey, key, 32UL );
+  root_disk.size       = 0U;
+  root_disk.generation = cold_pool[ root_idx ].key.generation;
+  fd_memcpy( root_disk.owner, owner2, 32UL );
+  FD_TEST( pwrite( fd, &root_disk, sizeof(root_disk), (off_t)fd_accdb_acc_offset( &cold_pool[ root_idx ] ) )==(long)sizeof(root_disk) );
+  fd_accdb_snapshot_load_end( accdb );
+
+  fd_accdb_fork_id_t child = fd_accdb_attach_child( accdb, root );
+  accdb_write( accdb, child, key, 20UL, NULL, 0UL, owner3 );
+
+  uint dirty_idx = cold_map[ cold_hash ];
+  FD_TEST( dirty_idx!=UINT_MAX && dirty_idx!=root_idx );
+  FD_TEST( fd_accdb_acc_offset( &cold_pool[ dirty_idx ] )==FD_ACCDB_OFF_INVAL );
+  FD_TEST( FD_ACCDB_SIZE_CACHE_VALID( cold_pool[ dirty_idx ].executable_size ) );
+
+  /* Model the pre-fix eviction window after it severed the cache
+     binding but before it published the replacement disk offset.  A
+     migration must never publish this unbacked version in the other
+     tier.  Production dirty eviction now retains CACHE_CLAIM across
+     this entire window; the explicit state below is also rejected as a
+     defensive invariant check. */
+  cold_pool[ dirty_idx ].cache_idx = FD_ACCDB_ACC_CIDX_INVAL;
+  cold_pool[ dirty_idx ].executable_size &= ~FD_ACCDB_SIZE_CACHE_VALID_BIT;
+
+  uchar const * keys[1] = { key };
+  ulong promotions_before = shmem->shmetrics->index_promotions;
+  ulong blocked_before    = shmem->shmetrics->index_blocked_migrations;
+  FD_TEST( fd_accdb_prefetch( accdb, 1UL, keys )==1UL );
+  int charge_busy = 0;
+  fd_accdb_background( accdb, &charge_busy );
+
+  FD_TEST( shmem->shmetrics->index_promotions==promotions_before );
+  FD_TEST( shmem->shmetrics->index_blocked_migrations==blocked_before+1UL );
+  FD_TEST( cold_map[ cold_hash ]==dirty_idx );
+
+  ulong hot_hash = fd_hash32( key, shmem->seed ) & (shmem->hot_chain_cnt-1UL);
+  for( uint idx=hot_map[ hot_hash ]; idx!=UINT_MAX; idx=hot_pool[ idx ].map.next )
+    FD_TEST( memcmp( hot_pool[ idx ].key.pubkey, key, 32UL ) );
+
+  FD_TEST( !munmap( test_index_mapping, shmem->cold_idx_file_sz ) );
+  test_teardown_poc( accdb, fd );
+}
+
 int
 main( int     argc,
       char ** argv ) {
@@ -2072,6 +2135,9 @@ main( int     argc,
 
   FD_LOG_NOTICE(( "test_disjoint_index_clears_retired_txn_backrefs ..." ));
   test_disjoint_index_clears_retired_txn_backrefs();
+
+  FD_LOG_NOTICE(( "test_disjoint_index_rejects_unbacked_dirty_migration ..." ));
+  test_disjoint_index_rejects_unbacked_dirty_migration();
 
   FD_LOG_NOTICE(( "test_acquire_b_refund_accounting ..." ));
   test_acquire_b_refund_accounting();
