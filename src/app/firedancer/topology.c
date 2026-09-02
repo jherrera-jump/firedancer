@@ -220,7 +220,8 @@ setup_topo_accdb( fd_topo_t *  topo,
                   ulong        cache_footprint,
                   int          bundle_enabled,
                   ulong        joiner_cnt,
-                  ulong        max_incremental_accounts ) {
+                  ulong        max_incremental_accounts,
+                  ulong        index_hot_size_gib ) {
   fd_topo_obj_t * obj = fd_topob_obj( topo, "accdb", wksp_name );
 
   ulong seed;
@@ -238,6 +239,7 @@ setup_topo_accdb( fd_topo_t *  topo,
   FD_TEST( fd_pod_insertf_ulong( topo->props, (ulong)!!bundle_enabled, "obj.%lu.bundle_enabled", obj->id ) );
   FD_TEST( fd_pod_insertf_ulong( topo->props, joiner_cnt,         "obj.%lu.joiner_cnt",         obj->id ) );
   FD_TEST( fd_pod_insertf_ulong( topo->props, max_incremental_accounts, "obj.%lu.max_incremental_accounts", obj->id ) );
+  FD_TEST( fd_pod_insertf_ulong( topo->props, index_hot_size_gib, "obj.%lu.index_hot_size_gib", obj->id ) );
   FD_TEST( fd_pod_insertf_ulong( topo->props, seed,               "obj.%lu.seed",               obj->id ) );
 
   return obj;
@@ -470,7 +472,10 @@ fd_topo_initialize( config_t * config ) {
     FD_TEST( fd_pod_insert_ulong( topo->props, "snapzp.fseq", zp_fseq->id ) );
 
     fd_topo_obj_t * backup = fd_topob_obj( topo, "backup", "snapmk" );
-    FD_TEST( fd_pod_insertf_ulong( topo->props, config->firedancer.accounts.max_accounts, "obj.%lu.max_accounts", backup->id ) );
+    ulong backup_idx_max = config->firedancer.accounts.max_accounts +
+                           fd_ulong_min( config->firedancer.accounts.max_accounts,
+                                         fd_accdb_index_hot_capacity( config->firedancer.accounts.index_hot_size_gib ) );
+    FD_TEST( fd_pod_insertf_ulong( topo->props, backup_idx_max, "obj.%lu.max_accounts", backup->id ) );
     FD_TEST( fd_pod_insert_ulong( topo->props, "backup", backup->id ) );
   }
 
@@ -1204,7 +1209,8 @@ fd_topo_initialize( config_t * config ) {
       config->firedancer.accounts.cache_size_gib*(1UL<<30UL),
       config->tiles.bundle.enabled,
       accdb_joiners,
-      snapmk_enabled ? config->firedancer.snapshots.max_incremental_snapshot_accounts : 0UL );
+      snapmk_enabled ? config->firedancer.snapshots.max_incremental_snapshot_accounts : 0UL,
+      config->firedancer.accounts.index_hot_size_gib );
   fd_topob_tile_uses( topo, &topo->tiles[ fd_topo_find_tile( topo, "accdb", 0UL ) ], accdb_obj, FD_SHMEM_JOIN_MODE_READ_WRITE );
   fd_topob_tile_uses( topo, &topo->tiles[ fd_topo_find_tile( topo, "replay", 0UL ) ], accdb_obj, FD_SHMEM_JOIN_MODE_READ_WRITE );
   if( !alpenglow_enabled ) {

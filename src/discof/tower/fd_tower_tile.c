@@ -1663,7 +1663,12 @@ init_choreo( void                 * scratch,
   ctx->tower              = fd_tower_join              ( fd_tower_new              ( tower, slot_max, VTR_MAX, ctx->seed )                       );
   ctx->scratch_tower      = fd_tower_vote_join         ( fd_tower_vote_new         ( scratch_tower )                                             );
   ctx->publishes          = publishes_join             ( publishes_new             ( publishes, pub_max )                                        );
-  ctx->accdb              = fd_accdb_join              ( fd_accdb_new              ( accdb, _accdb_shmem, FD_ACCDB_FD_RW, 0UL, NULL )            );
+  ctx->accdb              = fd_accdb_join              ( fd_accdb_new              ( accdb,
+                                                                                      _accdb_shmem,
+                                                                                      FD_ACCDB_FD_RW,
+                                                                                      FD_ACCDB_IDX_FD_RW,
+                                                                                      0UL,
+                                                                                      NULL ) );
   ctx->mleaders           = fd_multi_epoch_leaders_join( fd_multi_epoch_leaders_new( ctx->mleaders_mem )                                         );
   ctx->root_epoch_vtr_pool = epoch_vtr_pool_join( epoch_vtr_pool_new( root_epoch_vtr_pool, VTR_MAX ) );
   ctx->root_epoch_vtr_map  = epoch_vtr_map_join ( epoch_vtr_map_new ( root_epoch_vtr_map,  epoch_vtr_chain_cnt, ctx->seed ) );
@@ -2051,7 +2056,8 @@ populate_allowed_fds( fd_topo_t const *      topo,
   FD_SCRATCH_ALLOC_INIT( l, scratch );
   fd_tower_tile_t * ctx = FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_tower_tile_t), sizeof(fd_tower_tile_t) );
 
-  if( FD_UNLIKELY( out_fds_cnt<5UL ) ) FD_LOG_ERR(( "out_fds_cnt %lu", out_fds_cnt ));
+  int has_idx_fd = -1!=fcntl( FD_ACCDB_IDX_FD_RW, F_GETFD );
+  if( FD_UNLIKELY( out_fds_cnt<5UL+(ulong)has_idx_fd ) ) FD_LOG_ERR(( "out_fds_cnt %lu", out_fds_cnt ));
 
   ulong out_cnt = 0UL;
   out_fds[ out_cnt++ ] = 2; /* stderr */
@@ -2060,6 +2066,7 @@ populate_allowed_fds( fd_topo_t const *      topo,
   if( FD_LIKELY( ctx->checkpt_fd!=-1 ) ) out_fds[ out_cnt++ ] = ctx->checkpt_fd;
   if( FD_LIKELY( ctx->restore_fd!=-1 ) ) out_fds[ out_cnt++ ] = ctx->restore_fd;
   out_fds[ out_cnt++ ] = FD_ACCDB_FD_RW; /* accounts database */
+  if( has_idx_fd ) out_fds[ out_cnt++ ] = FD_ACCDB_IDX_FD_RW;
 
   return out_cnt;
 }

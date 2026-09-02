@@ -58,6 +58,13 @@ metrics_write( fd_accdb_tile_ctx_t * ctx ) {
   FD_MCNT_SET( ACCDB, COMPACTION_REQUESTED,     metrics->compactions_requested );
   FD_MCNT_SET( ACCDB, COMPACTION_COMPLETED,     metrics->compactions_completed );
   FD_MCNT_SET( ACCDB, ACCOUNT_RELOCATED_BYTES,  metrics->accounts_relocated_bytes );
+  FD_MCNT_SET( ACCDB, INDEX_HOT_HIT,            metrics->index_hot_hits );
+  FD_MCNT_SET( ACCDB, INDEX_COLD_FAULT,         metrics->index_cold_hits );
+  FD_MCNT_SET( ACCDB, INDEX_PROMOTION,          metrics->index_promotions );
+  FD_MCNT_SET( ACCDB, INDEX_DEMOTION,           metrics->index_demotions );
+  FD_MCNT_SET( ACCDB, INDEX_RETRY,              metrics->index_retries );
+  FD_MCNT_SET( ACCDB, INDEX_BLOCKED_MIGRATION,  metrics->index_blocked_migrations );
+  FD_MCNT_SET( ACCDB, INDEX_ADMISSION_STALL,    metrics->index_admission_stalls );
 
   fd_accdb_metrics_t const * rt = fd_accdb_metrics( ctx->accdb );
   FD_MCNT_ENUM_COPY( ACCDB, ACCOUNT_PREEVICTED, rt->accounts_preevicted_per_class );
@@ -150,7 +157,8 @@ unprivileged_init( fd_topo_t const *      topo,
     external_epoch_slots[ external_epoch_cnt++ ] = fseq;
   }
 
-  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, external_epoch_cnt, external_epoch_slots ) );
+  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW,
+                                            external_epoch_cnt, external_epoch_slots ) );
   FD_TEST( ctx->accdb );
 
   fd_startup_gate_init( ctx->startup_gate, topo, tile->in_cnt );
@@ -177,13 +185,15 @@ populate_allowed_fds( fd_topo_t const *      topo,
                       int *                  out_fds ) {
   (void)topo; (void)tile;
 
-  if( FD_UNLIKELY( out_fds_cnt<3UL ) ) FD_LOG_ERR(( "out_fds_cnt %lu", out_fds_cnt ));
+  int has_idx_fd = -1!=fcntl( FD_ACCDB_IDX_FD_RW, F_GETFD );
+  if( FD_UNLIKELY( out_fds_cnt<3UL+(ulong)has_idx_fd ) ) FD_LOG_ERR(( "out_fds_cnt %lu", out_fds_cnt ));
 
   ulong out_cnt = 0UL;
   out_fds[ out_cnt++ ] = 2; /* stderr */
   if( FD_LIKELY( -1!=fd_log_private_logfile_fd() ) )
     out_fds[ out_cnt++ ] = fd_log_private_logfile_fd(); /* logfile */
   out_fds[ out_cnt++ ] = FD_ACCDB_FD_RW; /* accounts db fd */
+  if( has_idx_fd ) out_fds[ out_cnt++ ] = FD_ACCDB_IDX_FD_RW;
   return out_cnt;
 }
 

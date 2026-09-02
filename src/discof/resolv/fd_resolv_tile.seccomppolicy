@@ -6,6 +6,9 @@
 #              lookup table accounts on cache miss.
 uint logfile_fd, uint accdb_ro_fd
 
+mmap
+madvise
+
 # logging: all log messages are written to a file and/or pipe
 #
 # 'WARNING' and above are written to the STDERR pipe, while all messages

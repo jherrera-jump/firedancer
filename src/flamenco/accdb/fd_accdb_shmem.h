@@ -31,6 +31,13 @@ struct fd_accdb_shmem_metrics {
    ulong accounts_relocated;
    ulong accounts_relocated_bytes;
    ulong partitions_freed;
+   ulong index_hot_hits;
+   ulong index_cold_hits;
+   ulong index_promotions;
+   ulong index_demotions;
+   ulong index_retries;
+   ulong index_blocked_migrations;
+   ulong index_admission_stalls;
 };
 
 typedef struct fd_accdb_shmem_metrics fd_accdb_shmem_metrics_t;
@@ -84,6 +91,12 @@ FD_PROTOTYPES_BEGIN
 FD_FN_CONST ulong
 fd_accdb_shmem_align( void );
 
+FD_FN_CONST ulong
+fd_accdb_index_footprint( ulong max_accounts );
+
+FD_FN_CONST ulong
+fd_accdb_index_hot_capacity( ulong index_hot_size_gib );
+
 ulong
 fd_accdb_shmem_footprint( ulong max_accounts,
                           ulong max_live_slots,
@@ -93,6 +106,17 @@ fd_accdb_shmem_footprint( ulong max_accounts,
                           ulong cache_min_reserved,
                           ulong joiner_cnt,
                           ulong max_incremental_accounts );
+
+ulong
+fd_accdb_shmem_footprint_ex( ulong max_accounts,
+                             ulong max_live_slots,
+                             ulong max_account_writes_per_slot,
+                             ulong partition_cnt,
+                             ulong cache_footprint,
+                             ulong cache_min_reserved,
+                             ulong joiner_cnt,
+                             ulong max_incremental_accounts,
+                             ulong index_hot_size_gib );
 
 void *
 fd_accdb_shmem_new( void * shmem,
@@ -107,6 +131,21 @@ fd_accdb_shmem_new( void * shmem,
                     ulong  seed,
                     ulong  joiner_cnt,
                     ulong  max_incremental_accounts );
+
+void *
+fd_accdb_shmem_new_ex( void * shmem,
+                       ulong  max_accounts,
+                       ulong  max_live_slots,
+                       ulong  max_account_writes_per_slot,
+                       ulong  partition_cnt,
+                       ulong  partition_sz,
+                       ulong  cache_footprint,
+                       ulong  cache_min_reserved,
+                       int    bundle_enabled,
+                       ulong  seed,
+                       ulong  joiner_cnt,
+                       ulong  max_incremental_accounts,
+                       ulong  index_hot_size_gib );
 
 fd_accdb_shmem_t *
 fd_accdb_shmem_join( void * shtc );

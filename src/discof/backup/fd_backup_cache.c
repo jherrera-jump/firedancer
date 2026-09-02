@@ -1,5 +1,8 @@
+#define _GNU_SOURCE
 #include "fd_backup_cache.h"
 #include "fd_backup.h"
+#include <sys/mman.h>
+#include <errno.h>
 
 fd_backup_cache_t *
 fd_backup_cache_init( fd_backup_cache_t *        backup,
@@ -26,17 +29,17 @@ fd_backup_cache_t *
 fd_backup_cache_join( fd_backup_cache_t * backup,
                       fd_accdb_shmem_t *  accdb,
                       ulong *             epoch_fseq ) {
-  ulong max_live_slots = accdb->max_live_slots;
   ulong max_accounts   = accdb->max_accounts;
-
-  ulong chain_cnt = fd_ulong_pow2_up( (max_accounts>>1) + (max_accounts&1UL) );
-
-  FD_SCRATCH_ALLOC_INIT( l, accdb );
-  /*                       */FD_SCRATCH_ALLOC_APPEND( l, FD_ACCDB_SHMEM_ALIGN,           sizeof(fd_accdb_shmem_t)                                );
-  /*                       */FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_accdb_fork_shmem_t), max_live_slots*sizeof(fd_accdb_fork_shmem_t)            );
-  /*                       */FD_SCRATCH_ALLOC_APPEND( l, descends_set_align(),           max_live_slots*descends_set_footprint( max_live_slots ) );
-  void * _acc_map          = FD_SCRATCH_ALLOC_APPEND( l, alignof(uint),                  chain_cnt*sizeof(uint)                                  );
-  void * _acc_pool_ele     = FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_accdb_accmeta_t),    max_accounts*sizeof(fd_accdb_accmeta_t)             );
+  uint const * _acc_map = (uint const *)((uchar const *)accdb + accdb->acc_map_off);
+  fd_accdb_accmeta_t const * _hot_pool = (fd_accdb_accmeta_t const *)((uchar const *)accdb + accdb->acc_pool_off);
+  uint const * _hot_map = accdb->index_hot_size_gib ? (uint const *)((uchar const *)accdb + accdb->hot_map_off) : NULL;
+  fd_accdb_accmeta_t const * _acc_pool_ele = _hot_pool;
+  if( accdb->index_hot_size_gib ) {
+    void * mapping = mmap( NULL, accdb->cold_idx_file_sz, PROT_READ, MAP_SHARED, FD_ACCDB_IDX_FD_RO, 0 );
+    if( FD_UNLIKELY( mapping==MAP_FAILED ) ) FD_LOG_ERR(( "mmap(accounts.db.idx read-only) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+    if( FD_UNLIKELY( madvise( mapping, accdb->cold_idx_file_sz, MADV_RANDOM ) ) ) FD_LOG_ERR(( "madvise(accounts.db.idx) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+    _acc_pool_ele = mapping;
+  }
 
   uchar const * cache[ FD_ACCDB_CACHE_CLASS_CNT ];
   for( ulong c=0UL; c<FD_ACCDB_CACHE_CLASS_CNT; c++ ) {
@@ -47,8 +50,13 @@ fd_backup_cache_join( fd_backup_cache_t * backup,
     .acc_map      = _acc_map,
     .acc_pool     = _acc_pool_ele,
     .max_accounts = max_accounts,
+    .hot_map      = _hot_map,
+    .hot_pool     = _hot_pool,
+    .hot_max      = accdb->hot_max,
+    .hot_chain_mask = (uint)(accdb->hot_chain_cnt ? accdb->hot_chain_cnt-1UL : 0UL),
+    .tiered       = !!accdb->index_hot_size_gib,
     .seed         = accdb->seed,
-    .chain_mask   = (uint)( chain_cnt-1UL ),
+    .chain_mask   = (uint)( accdb->chain_cnt-1UL ),
     .epoch_slot   = epoch_fseq,
     .epoch        = &accdb->epoch
   };
@@ -79,13 +87,12 @@ static void
 filter_batch( fd_backup_cache_t * backup,
               fd_backup_cache_msg_t * frag ) {
   fd_backup_accidx_t const * idx      = &backup->idx;
-  fd_accdb_accmeta_t const * acc_pool = idx->acc_pool;
 
   /* filter out non-rooted accounts and tombstones */
   static fd_accdb_accmeta_t const dead_meta = { .key = { .generation = UINT_MAX } };
   for( ulong i=0UL; i<FD_BACKUP_CACHE_PARA; i++ ) {
     uint acc_idx = frag->acc_idx[ i ];
-    fd_accdb_accmeta_t const * m = acc_idx!=UINT_MAX ? &acc_pool[ acc_idx ] : &dead_meta;
+    fd_accdb_accmeta_t const * m = fd_backup_accidx_valid( idx, acc_idx ) ? fd_backup_accidx_meta( idx, acc_idx ) : &dead_meta;
     int keep = fd_backup_accidx_rooted( idx,
                                         FD_VOLATILE_CONST( m->key.generation ),
                                         FD_VOLATILE_CONST( m->lamports       ) );
@@ -98,7 +105,7 @@ filter_batch( fd_backup_cache_t * backup,
 
   uint head[ FD_BACKUP_CACHE_PARA ];
   for( ulong i=0UL; i<FD_BACKUP_CACHE_PARA; i++ ) {
-    head[ i ] = frag->acc_idx[ i ]!=UINT_MAX ? idx->acc_map[ backup->chain_idx[ i ] ] : UINT_MAX;
+    head[ i ] = frag->acc_idx[ i ]!=UINT_MAX ? fd_backup_accidx_map( idx, frag->acc_idx[ i ] )[ backup->chain_idx[ i ] ] : UINT_MAX;
   }
 
   /* sentinel to assist with branchless code */
@@ -111,15 +118,16 @@ filter_batch( fd_backup_cache_t * backup,
 
     /* check for matches */
     for( ulong i=0UL; i<FD_BACKUP_CACHE_PARA; i++ ) {
-      found_set_insert_if( found, frag->acc_idx[ i ]==head[ i ], i );
+      found_set_insert_if( found, frag->acc_idx[ i ]!=UINT_MAX && fd_accdb_acc_ref_idx( frag->acc_idx[ i ] )==head[ i ], i );
     }
 
     /* convert acc_idx to pointers */
     fd_accdb_accmeta_t const * gather[ FD_BACKUP_CACHE_PARA ];
     for( ulong i=0UL; i<FD_BACKUP_CACHE_PARA; i++ ) {
       uint acc_idx = head[ i ];
-      FD_DCHECK_CRIT( fd_backup_accidx_valid( idx, acc_idx ) || acc_idx==UINT_MAX, "acc_idx out of bounds" );
-      gather[ i ] = acc_idx!=UINT_MAX ? &acc_pool[ acc_idx ] : &dead;
+      uint ref = acc_idx==UINT_MAX ? UINT_MAX : fd_accdb_acc_ref( acc_idx, fd_accdb_acc_ref_is_hot( frag->acc_idx[ i ] ) );
+      FD_DCHECK_CRIT( fd_backup_accidx_valid( idx, ref ) || ref==UINT_MAX, "acc_idx out of bounds" );
+      gather[ i ] = ref!=UINT_MAX ? fd_backup_accidx_meta( idx, ref ) : &dead;
     }
 
     /* wide gather */
@@ -179,7 +187,7 @@ fd_backup_cache_scan( fd_backup_cache_t * backup,
       fd_accdb_cache_line_t const * line = cache_line( backup, cls, idx );
       frag->acc_idx[ i ] = line->acc_idx;
       fd_memcpy( frag->pubkey[ i ].uc, line->key.pubkey, sizeof(fd_pubkey_t) );
-      backup->chain_idx[ i ] = fd_backup_accidx_chain( accidx, line->key.pubkey );
+      backup->chain_idx[ i ] = fd_backup_accidx_chain_for_ref( accidx, line->key.pubkey, line->acc_idx );
     }
   } else {
     /* slow path */
@@ -192,7 +200,7 @@ fd_backup_cache_scan( fd_backup_cache_t * backup,
       fd_accdb_cache_line_t const * line = cache_line( backup, cls, idx );
       frag->acc_idx[ i ] = line->acc_idx;
       fd_memcpy( frag->pubkey[ i ].uc, line->key.pubkey, sizeof(fd_pubkey_t) );
-      backup->chain_idx[ i ] = fd_backup_accidx_chain( accidx, line->key.pubkey );
+      backup->chain_idx[ i ] = fd_backup_accidx_chain_for_ref( accidx, line->key.pubkey, line->acc_idx );
     }
     if( FD_UNLIKELY( idx >= backup->cache_max[ cls ] ) ) {
       backup->cache_class++;
@@ -242,7 +250,7 @@ fd_backup_cache_read( fd_backup_cache_t * ctx,
   }
 
   /* This is a partial copy of read_one_nocopy */
-  fd_accdb_accmeta_t const * accmeta = &accidx->acc_pool[ acc_idx ];
+  fd_accdb_accmeta_t const * accmeta = fd_backup_accidx_meta( accidx, acc_idx );
   if( FD_UNLIKELY( memcmp( accmeta->key.pubkey, pubkey->uc, sizeof(fd_pubkey_t) ) ) ) {
     return FD_BACKUP_CACHE_ERR_MISS;
   }
@@ -251,13 +259,14 @@ fd_backup_cache_read( fd_backup_cache_t * ctx,
   ///   Walk the hash chain at acc_map[hash(pubkey)] using the same
   ///   visibility test as fd_accdb_acquire_inner.  See that function
   ///   for the detailed safety argument under concurrent prepend.
-  ulong chain_idx = fd_backup_accidx_chain( accidx, pubkey->uc );
-  uint acc_idx2 = FD_VOLATILE_CONST( accidx->acc_map[ chain_idx ] );
+  ulong chain_idx = fd_backup_accidx_chain_for_ref( accidx, pubkey->uc, acc_idx );
+  uint acc_idx2 = FD_VOLATILE_CONST( fd_backup_accidx_map( accidx, acc_idx )[ chain_idx ] );
   _Bool found = 0;
   while( acc_idx2!=UINT_MAX ) {
-    FD_DCHECK_CRIT( fd_backup_accidx_valid( accidx, acc_idx2 ), "acc_idx out of bounds" );
-    fd_accdb_accmeta_t const * candidate = &accidx->acc_pool[ acc_idx2 ];
-    found |= acc_idx==acc_idx2;
+    uint ref2 = fd_accdb_acc_ref( acc_idx2, fd_accdb_acc_ref_is_hot( acc_idx ) );
+    FD_DCHECK_CRIT( fd_backup_accidx_valid( accidx, ref2 ), "acc_idx out of bounds" );
+    fd_accdb_accmeta_t const * candidate = fd_backup_accidx_meta( accidx, ref2 );
+    found |= fd_accdb_acc_ref_idx( acc_idx )==acc_idx2;
     acc_idx2 = FD_VOLATILE_CONST( candidate->map.next );
   }
   if( !found ) return FD_BACKUP_CACHE_ERR_MISS;

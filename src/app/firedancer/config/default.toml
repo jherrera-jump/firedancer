@@ -660,6 +660,11 @@ telemetry = true
     # down the index structure, and use more memory than is necessary.
     max_accounts = 1_300_000_000
 
+    # Experimental disjoint hot/cold account index.  0 keeps the legacy
+    # fully resident index; 2 places the cold metadata pool in
+    # accounts.db.idx and budgets 2 GiB for the hot map and metadata.
+    index_hot_size_gib = 2
+
     # The size of the in-memory cache for hit accounts, in GiB.  The
     # performance of the validator is surprisingly not sensitive to this
     # parameter, as long as it is large enough to hold the hottest

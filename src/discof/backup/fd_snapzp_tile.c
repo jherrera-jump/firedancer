@@ -208,7 +208,7 @@ unprivileged_init( fd_topo_t const *      topo,
   FD_TEST( accdb_shmem_ro );
   ulong * epoch_fseq = fd_fseq_join( fd_topo_obj_laddr( topo, tile->snapzp.accdb_epoch_obj_id ) );
   FD_TEST( epoch_fseq );
-  ctx->accdb = fd_accdb_join_readonly( _accdb, accdb_shmem_ro, epoch_fseq, FD_ACCDB_FD_RO );
+  ctx->accdb = fd_accdb_join_readonly( _accdb, accdb_shmem_ro, epoch_fseq, FD_ACCDB_FD_RO, FD_ACCDB_IDX_FD_RO );
   FD_TEST( ctx->accdb );
   FD_TEST( fd_backup_cache_join( ctx->acc_cache, accdb_shmem_ro, epoch_fseq ) );
   ctx->overrun = fd_backup_overrun( fd_topo_obj_laddr( topo, tile->snapzp.visited_set_obj_id ) );
@@ -228,12 +228,14 @@ populate_allowed_fds( fd_topo_t const *      topo,
                       int *                  out_fds ) {
   (void)topo;
   ulong snap_fd_cnt = tile->snapzp.snap_fd_cnt;
-  FD_CHECK_ERR( out_fds_cnt>=3UL+snap_fd_cnt, "out_fds[] too small" );
+  int has_idx_fd = -1!=fcntl( FD_ACCDB_IDX_FD_RO, F_GETFD );
+  FD_CHECK_ERR( out_fds_cnt>=3UL+snap_fd_cnt+(ulong)has_idx_fd, "out_fds[] too small" );
   ulong out_cnt = 0UL;
   out_fds[ out_cnt++ ] = 2; /* stderr */
   if( FD_LIKELY( -1!=fd_log_private_logfile_fd() ) )
     out_fds[ out_cnt++ ] = fd_log_private_logfile_fd(); /* logfile */
   out_fds[ out_cnt++ ] = FD_ACCDB_FD_RO;
+  if( has_idx_fd ) out_fds[ out_cnt++ ] = FD_ACCDB_IDX_FD_RO;
   for( uint i=0U; i<snap_fd_cnt; i++ )
     out_fds[ out_cnt++ ] = FD_SNAP_DIO_FD( i );
   return out_cnt;
@@ -434,7 +436,7 @@ accmeta_await_evict( fd_snapzp_t * ctx,
   fd_backup_accidx_t * idx = &ctx->acc_cache->idx;
   FD_CHECK_CRIT( fd_backup_accidx_valid( idx, acc_idx ), "invalid account index" );
 
-  fd_accdb_accmeta_t const * acc = &idx->acc_pool[ acc_idx ];
+  fd_accdb_accmeta_t const * acc = fd_backup_accidx_meta( idx, acc_idx );
   for(;;) {
     FD_COMPILER_MFENCE();
     FD_VOLATILE( *idx->epoch_slot ) = FD_VOLATILE_CONST( *idx->epoch );
@@ -576,7 +578,7 @@ accmeta_disk( fd_snapzp_t *       ctx,
   fd_backup_accidx_t const * idx = &ctx->acc_cache->idx;
   if( FD_UNLIKELY( !fd_backup_accidx_valid( idx, acc_idx ) ) ) return NULL;
 
-  fd_accdb_accmeta_t const * acc = &idx->acc_pool[ acc_idx ];
+  fd_accdb_accmeta_t const * acc = fd_backup_accidx_meta( idx, acc_idx );
   uint es = FD_VOLATILE_CONST( acc->executable_size );
   if( FD_UNLIKELY( FD_ACCDB_SIZE_DATA( es )!=FD_ACCDB_SIZE_DATA( size ) ) ) return NULL;
   if( FD_UNLIKELY( memcmp( acc->key.pubkey, pubkey->uc, sizeof(fd_pubkey_t) ) ) ) return NULL;
@@ -715,14 +717,13 @@ msg_acc_disk_batch( fd_snapzp_t *                      ctx,
   FD_CHECK_CRIT( !ctx->disk.active, "received account batch while already processing a disk account" );
 
   fd_backup_accidx_t const * idx      = &ctx->acc_cache->idx;
-  fd_accdb_accmeta_t const * acc_pool = idx->acc_pool;
 
   /* MLP gather of account index entries */
   static fd_accdb_accmeta_t const dead = {0};
   fd_accdb_accmeta_t const * gather[ FD_BACKUP_DISK_PARA ];
   for( ulong i=0UL; i<FD_BACKUP_DISK_PARA; i++ ) {
     uint ai = batch->acc_idx[ i ];
-    gather[ i ] = fd_backup_accidx_valid( idx, ai ) ? &acc_pool[ ai ] : &dead;
+    gather[ i ] = fd_backup_accidx_valid( idx, ai ) ? fd_backup_accidx_meta( idx, ai ) : &dead;
   }
   ulong lamports[ FD_BACKUP_DISK_PARA ];
   uint  exec_sz [ FD_BACKUP_DISK_PARA ];

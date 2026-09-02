@@ -200,6 +200,21 @@ typedef struct fd_accdb_accmeta fd_accdb_accmeta_t;
 FD_STATIC_ASSERT( alignof(fd_accdb_accmeta_t)==64, layout );
 FD_STATIC_ASSERT( sizeof (fd_accdb_accmeta_t)==64, layout );
 
+/* Account references carried outside a map chain are tagged so a
+   cache line or fork transaction can name either metadata pool.  Map
+   heads and map.next remain tier-local, untagged indices. */
+
+typedef uint fd_accdb_acc_ref_t;
+
+#define FD_ACCDB_ACC_REF_HOT_BIT (1U<<31)
+#define FD_ACCDB_ACC_REF_IDX_MASK (FD_ACCDB_ACC_REF_HOT_BIT-1U)
+#define FD_ACCDB_ACC_REF_NULL UINT_MAX
+
+static inline int  fd_accdb_acc_ref_is_null( fd_accdb_acc_ref_t ref ) { return ref==FD_ACCDB_ACC_REF_NULL; }
+static inline int  fd_accdb_acc_ref_is_hot ( fd_accdb_acc_ref_t ref ) { return ref!=FD_ACCDB_ACC_REF_NULL && !!(ref & FD_ACCDB_ACC_REF_HOT_BIT); }
+static inline uint fd_accdb_acc_ref_idx    ( fd_accdb_acc_ref_t ref ) { return ref & FD_ACCDB_ACC_REF_IDX_MASK; }
+static inline fd_accdb_acc_ref_t fd_accdb_acc_ref( uint idx, int hot ) { return idx | (hot ? FD_ACCDB_ACC_REF_HOT_BIT : 0U); }
+
 #define FD_ACCDB_OFF_BITS  48UL
 #define FD_ACCDB_OFF_MASK  ((1UL<<FD_ACCDB_OFF_BITS)-1UL)       /* 0x0000_FFFF_FFFF_FFFF */
 #define FD_ACCDB_OFF_INVAL FD_ACCDB_OFF_MASK                    /* sentinel: offset bits all-ones */
@@ -369,6 +384,19 @@ packed_partition_file_offset( accdb_offset_t const * offset,
    the line as unavailable. */
 #define FD_ACCDB_EVICT_SENTINEL UINT_MAX
 
+#define FD_ACCDB_INDEX_STRIPE_CNT    (4096UL)
+#define FD_ACCDB_PREFETCH_DEPTH      (4096UL)
+#define FD_ACCDB_ADMISSION_CNT       (65536UL)
+#define FD_ACCDB_MIGRATION_RETIRE_MAX (8192UL)
+
+struct __attribute__((aligned(64))) fd_accdb_index_stripe {
+  uint lock;
+  uint seq;
+  uchar pad[ 56UL ];
+};
+
+typedef struct fd_accdb_index_stripe fd_accdb_index_stripe_t;
+
 struct fd_accdb_shmem_private {
   int partition_lock  __attribute__((aligned(64)));
 
@@ -476,6 +504,37 @@ struct fd_accdb_shmem_private {
   ulong max_live_slots;
   ulong max_accounts;
   ulong max_account_writes_per_slot;
+
+  /* Experimental disjoint index (index_hot_size_gib==2).  In legacy
+     mode these fields are zero and acc_pool_off names the traditional
+     max_accounts-sized resident pool. */
+  ulong index_hot_size_gib;
+  ulong acc_map_off;
+  ulong acc_pool_off;
+  ulong hot_map_off;
+  ulong hot_txn_idx_off;
+  ulong hot_heat_off;
+  ulong hot_chain_cnt;
+  ulong hot_max;
+  ulong cold_txn_idx_file_off;
+  ulong cold_idx_file_sz;
+  ulong cold_highwater __attribute__((aligned(64)));
+  ulong cold_free_ver_top __attribute__((aligned(64)));
+  ulong hot_used __attribute__((aligned(64)));
+  ulong hot_clock_hand;
+  ulong hot_emergency_reserve;
+
+  fd_accdb_index_stripe_t index_stripe[ FD_ACCDB_INDEX_STRIPE_CNT ];
+
+  int   prefetch_lock __attribute__((aligned(64)));
+  uint  prefetch_head;
+  uint  prefetch_tail;
+  uchar prefetch_key[ FD_ACCDB_PREFETCH_DEPTH ][ 32UL ];
+  uchar admission[ FD_ACCDB_ADMISSION_CNT ];
+
+  uint migration_retire[ FD_ACCDB_MIGRATION_RETIRE_MAX ];
+  uint migration_retire_cnt;
+  ulong migration_retire_epoch;
 
   /* Hard upper bound on concurrent joiners, set at construction.
      Used to determine whether cache_class_used tracking can be

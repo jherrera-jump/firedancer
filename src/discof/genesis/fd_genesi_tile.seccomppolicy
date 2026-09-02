@@ -7,6 +7,9 @@
 #              progress.
 uint logfile_fd, uint in_genesis_fd, uint out_genesis_fd, uint out_dir_fd, uint accounts_fd
 
+mmap
+madvise
+
 # logging: all log messages are written to a file and/or pipe
 #
 # 'WARNING' and above are written to the STDERR pipe, while all

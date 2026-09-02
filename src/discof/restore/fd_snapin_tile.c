@@ -25,6 +25,8 @@
 
 #include "generated/fd_snapin_tile_seccomp.h"
 
+#include <fcntl.h>
+
 #define NAME "snapin"
 
 /* The snapin tile is a state machine that parses and loads a full
@@ -1674,7 +1676,8 @@ populate_allowed_fds( fd_topo_t      const * topo FD_PARAM_UNUSED,
                       fd_topo_tile_t const * tile FD_PARAM_UNUSED,
                       ulong                  out_fds_cnt,
                       int *                  out_fds ) {
-  if( FD_UNLIKELY( out_fds_cnt<3UL ) ) FD_LOG_ERR(( "invalid out_fds_cnt %lu", out_fds_cnt ));
+  int has_idx_fd = -1!=fcntl( FD_ACCDB_IDX_FD_RW, F_GETFD );
+  if( FD_UNLIKELY( out_fds_cnt<3UL+(ulong)has_idx_fd ) ) FD_LOG_ERR(( "invalid out_fds_cnt %lu", out_fds_cnt ));
 
   ulong out_cnt = 0;
   out_fds[ out_cnt++ ] = 2UL; /* stderr */
@@ -1682,6 +1685,7 @@ populate_allowed_fds( fd_topo_t      const * topo FD_PARAM_UNUSED,
     out_fds[ out_cnt++ ] = fd_log_private_logfile_fd(); /* logfile */
   }
   out_fds[ out_cnt++ ] = FD_ACCDB_FD_RW; /* accounts db */
+  if( has_idx_fd ) out_fds[ out_cnt++ ] = FD_ACCDB_IDX_FD_RW;
 
   return out_cnt;
 }
@@ -1745,7 +1749,7 @@ unprivileged_init( fd_topo_t const *      topo,
   void * _accdb_shmem = fd_topo_obj_laddr( topo, tile->snapin.accdb_obj_id );
   fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( _accdb_shmem );
   FD_TEST( accdb_shmem );
-  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, 0UL, NULL ) );
+  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW, 0UL, NULL ) );
   FD_TEST( ctx->accdb );
 
   void * _txncache_shmem = fd_topo_obj_laddr( topo, tile->snapin.txncache_obj_id );

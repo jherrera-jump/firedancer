@@ -13,7 +13,9 @@
 #include "../../../flamenco/accdb/fd_accdb_private.h"
 
 #include <fcntl.h> /* open */
+#include <errno.h>
 #include <sys/resource.h>
+#include <sys/mman.h>
 #include <linux/capability.h>
 #include <unistd.h> /* close, sleep */
 #include <stdlib.h>
@@ -95,7 +97,8 @@ snapshot_load_topo( config_t * config ) {
       config->firedancer.accounts.cache_size_gib*(1UL<<30UL),
       config->tiles.bundle.enabled,
       2UL,
-      0UL );
+      0UL,
+      config->firedancer.accounts.index_hot_size_gib );
   FD_TEST( fd_pod_insertf_ulong( topo->props, accdb_obj->id, "accdb" ) );
 
   fd_topob_wksp( topo, "banks" );
@@ -352,32 +355,34 @@ accounts_hist( accounts_hist_t * hist,
   fd_accdb_shmem_t * shmem = fd_accdb_shmem_join( _accdb_shmem );
   FD_TEST( shmem );
 
-  /* Recompute the shmem layout to locate acc_map and acc_pool element
-     storage without taking a writer joiner slot.  This mirrors the
-     layout in fd_accdb_shmem_new and fd_accdb_join_readonly. */
+  uint const * acc_map = (uint const *)((uchar const *)shmem + shmem->acc_map_off);
+  fd_accdb_accmeta_t const * resident_pool = (fd_accdb_accmeta_t const *)((uchar const *)shmem + shmem->acc_pool_off);
+  fd_accdb_accmeta_t const * cold_pool = resident_pool;
+  void * cold_mapping = NULL;
 
-  ulong max_live_slots              = shmem->max_live_slots;
-  ulong max_accounts                = shmem->max_accounts;
-  ulong chain_cnt                   = shmem->chain_cnt;
+  if( shmem->index_hot_size_gib ) {
+    cold_mapping = mmap( NULL, shmem->cold_idx_file_sz, PROT_READ, MAP_SHARED, FD_ACCDB_IDX_FD_RO, 0 );
+    if( FD_UNLIKELY( cold_mapping==MAP_FAILED ) ) FD_LOG_ERR(( "mmap(accounts.db.idx) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+    cold_pool = (fd_accdb_accmeta_t const *)cold_mapping;
+  }
 
-  FD_SCRATCH_ALLOC_INIT( l, shmem );
-                                  FD_SCRATCH_ALLOC_APPEND( l, FD_ACCDB_SHMEM_ALIGN,           sizeof(fd_accdb_shmem_t)                                );
-                                  FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_accdb_fork_shmem_t), max_live_slots*sizeof(fd_accdb_fork_shmem_t)            );
-                                  FD_SCRATCH_ALLOC_APPEND( l, descends_set_align(),           max_live_slots*descends_set_footprint( max_live_slots ) );
-  uint *               acc_map  = FD_SCRATCH_ALLOC_APPEND( l, alignof(uint),                  chain_cnt*sizeof(uint)                                  );
-  fd_accdb_accmeta_t * acc_pool = FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_accdb_accmeta_t),    max_accounts*sizeof(fd_accdb_accmeta_t)                 );
-
-  /* Walk every hash chain.  Each non-UINT_MAX head index yields a
-     linked list of live acc_pool elements via map.next. */
-
-  for( ulong chain_i=0UL; chain_i<chain_cnt; chain_i++ ) {
-    uint acc_idx = acc_map[ chain_i ];
-    while( acc_idx!=UINT_MAX ) {
-      fd_accdb_accmeta_t const * accmeta = &acc_pool[ acc_idx ];
-      ulong data_sz = (ulong)FD_ACCDB_SIZE_DATA( accmeta->executable_size );
-      accounts_hist_update( hist, sizeof(fd_accdb_disk_meta_t) + data_sz );
-      acc_idx = accmeta->map.next;
+  /* Walk cold (or legacy) chains, then the disjoint hot chains. */
+  for( ulong chain_i=0UL; chain_i<shmem->chain_cnt; chain_i++ ) {
+    for( uint acc_idx=acc_map[ chain_i ]; acc_idx!=UINT_MAX; acc_idx=cold_pool[ acc_idx ].map.next ) {
+      fd_accdb_accmeta_t const * accmeta = &cold_pool[ acc_idx ];
+      accounts_hist_update( hist, sizeof(fd_accdb_disk_meta_t) + (ulong)FD_ACCDB_SIZE_DATA( accmeta->executable_size ) );
     }
+  }
+
+  if( shmem->index_hot_size_gib ) {
+    uint const * hot_map = (uint const *)((uchar const *)shmem + shmem->hot_map_off);
+    for( ulong chain_i=0UL; chain_i<shmem->hot_chain_cnt; chain_i++ ) {
+      for( uint acc_idx=hot_map[ chain_i ]; acc_idx!=UINT_MAX; acc_idx=resident_pool[ acc_idx ].map.next ) {
+        fd_accdb_accmeta_t const * accmeta = &resident_pool[ acc_idx ];
+        accounts_hist_update( hist, sizeof(fd_accdb_disk_meta_t) + (ulong)FD_ACCDB_SIZE_DATA( accmeta->executable_size ) );
+      }
+    }
+    if( FD_UNLIKELY( munmap( cold_mapping, shmem->cold_idx_file_sz ) ) ) FD_LOG_ERR(( "munmap(accounts.db.idx) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
   }
 }
 

@@ -5,6 +5,9 @@
 #              store account data as not all of can fit in memory.
 uint logfile_fd, uint accounts_fd
 
+mmap
+madvise
+
 # logging: all log messages are written to a file and/or pipe
 #
 # 'WARNING' and above are written to the STDERR pipe, while all

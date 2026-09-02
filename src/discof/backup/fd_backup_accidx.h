@@ -12,9 +12,14 @@
 #include "../../util/fd_hash32.h"
 
 struct fd_backup_accidx {
-  uint const *               acc_map;      /* map chains */
-  fd_accdb_accmeta_t const * acc_pool;     /* map ele pool */
+  uint const *               acc_map;      /* cold / legacy map chains */
+  fd_accdb_accmeta_t const * acc_pool;     /* cold / legacy pool */
   ulong                      max_accounts; /* map ele pool max */
+  uint const *               hot_map;
+  fd_accdb_accmeta_t const * hot_pool;
+  ulong                      hot_max;
+  uint                       hot_chain_mask;
+  int                        tiered;
   ulong                      seed;         /* map hash function */
   uint                       chain_mask;   /* map chain count - 1 */
 
@@ -45,7 +50,37 @@ fd_backup_accidx_chain( fd_backup_accidx_t const * idx,
 FD_FN_PURE static inline int
 fd_backup_accidx_valid( fd_backup_accidx_t const * idx,
                         uint                       ele ) {
-  return (ulong)ele < idx->max_accounts;
+  if( ele==UINT_MAX ) return 0;
+  ulong raw = fd_accdb_acc_ref_idx( ele );
+  return fd_accdb_acc_ref_is_hot( ele ) ? (idx->tiered && raw<idx->hot_max) : raw<idx->max_accounts;
+}
+
+FD_FN_PURE static inline fd_accdb_accmeta_t const *
+fd_backup_accidx_meta( fd_backup_accidx_t const * idx,
+                       uint                       ref ) {
+  uint raw = fd_accdb_acc_ref_idx( ref );
+  return fd_accdb_acc_ref_is_hot( ref ) ? &idx->hot_pool[ raw ] : &idx->acc_pool[ raw ];
+}
+
+FD_FN_PURE static inline uint const *
+fd_backup_accidx_map( fd_backup_accidx_t const * idx,
+                      uint                       ref ) {
+  return fd_accdb_acc_ref_is_hot( ref ) ? idx->hot_map : idx->acc_map;
+}
+
+FD_FN_PURE static inline uint
+fd_backup_accidx_chain_for_ref( fd_backup_accidx_t const * idx,
+                                uchar const                pubkey[ static 32 ],
+                                uint                       ref ) {
+  uint mask = fd_accdb_acc_ref_is_hot( ref ) ? idx->hot_chain_mask : idx->chain_mask;
+  return (uint)(fd_hash32( pubkey, idx->seed ) & mask);
+}
+
+FD_FN_PURE static inline ulong
+fd_backup_accidx_visited_idx( fd_backup_accidx_t const * idx,
+                              uint                       ref ) {
+  return fd_accdb_acc_ref_is_hot( ref ) ? idx->max_accounts + (ulong)fd_accdb_acc_ref_idx( ref )
+                                        : (ulong)fd_accdb_acc_ref_idx( ref );
 }
 
 /* fd_backup_accidx_rooted returns 1 if the account version described by

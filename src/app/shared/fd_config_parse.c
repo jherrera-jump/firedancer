@@ -98,6 +98,7 @@ fd_config_extract_podf( uchar *        pod,
 
   CFG_POP      ( ulong,  accounts.max_accounts                               );
   CFG_POP      ( ulong,  accounts.cache_size_gib                             );
+  CFG_POP      ( ulong,  accounts.index_hot_size_gib                         );
 
   CFG_POP      ( ulong,  runtime.max_live_slots                              );
   CFG_POP      ( ulong,  runtime.max_fork_width                              );

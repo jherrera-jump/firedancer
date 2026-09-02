@@ -1180,6 +1180,13 @@ EXAMPLES
     <counter name="CompactionRequested" summary="Total number of compactions requested on the account database" />
     <counter name="CompactionCompleted" summary="Total number of compactions fully completed on the account database, less than or equal to the requested amount" />
     <counter name="AccountRelocatedBytes" summary="Total number of bytes moved in the account database during compaction" />
+    <counter name="IndexHotHit" summary="Account index lookups served by the hot tier" />
+    <counter name="IndexColdFault" summary="Account index lookups that fell through to the mmap-backed cold tier" />
+    <counter name="IndexPromotion" summary="Pubkey version bundles promoted from cold to hot storage" />
+    <counter name="IndexDemotion" summary="Pubkey version bundles demoted from hot to cold storage" />
+    <counter name="IndexRetry" summary="Account index lookups retried after concurrent tier migration" />
+    <counter name="IndexBlockedMigration" summary="Tier migrations deferred because the bundle changed or a cache line was pinned" />
+    <counter name="IndexAdmissionStall" summary="Writable account-slot reservations that waited for tier capacity" />
 
     <counter name="AccountPreevicted" enum="AccdbCacheClass" summary="Number of accounts preemptively evicted (written back) from the account database cache by the background preevict pass, broken down by cache size class" />
     <counter name="BytesRead" summary="Number of bytes read from the account database" />

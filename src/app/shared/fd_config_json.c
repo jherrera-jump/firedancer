@@ -367,6 +367,7 @@ fd_config_to_json( fd_config_t const * config,
   jw_obj_open( &w, "accounts" );
     jw_ulong( &w, "max_accounts",   f->accounts.max_accounts );
     jw_ulong( &w, "cache_size_gib", f->accounts.cache_size_gib );
+    jw_ulong( &w, "index_hot_size_gib", f->accounts.index_hot_size_gib );
   jw_obj_close( &w );
 
   jw_obj_open( &w, "runtime" );

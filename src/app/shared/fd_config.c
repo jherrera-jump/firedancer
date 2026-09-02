@@ -515,6 +515,9 @@ fd_config_validatef( fd_configf_t const * config ) {
 
   CFG_HAS_NON_ZERO( accounts.max_accounts   );
   CFG_HAS_NON_ZERO( accounts.cache_size_gib );
+  if( FD_UNLIKELY( config->accounts.index_hot_size_gib!=0UL && config->accounts.index_hot_size_gib!=2UL ) ) {
+    FD_LOG_ERR(( "`accounts.index_hot_size_gib` must be 0 (legacy) or 2 (mmap index POC)" ));
+  }
 
   CFG_HAS_NON_ZERO( development.genesis.max_file_size_mib );
   if( FD_UNLIKELY( config->development.genesis.max_file_size_mib>FD_GENESIS_MAX_FILE_SIZE_MIB ) ) {

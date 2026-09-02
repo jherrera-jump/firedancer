@@ -102,6 +102,7 @@ struct fd_configf {
   struct {
     ulong max_accounts;
     ulong cache_size_gib;
+    ulong index_hot_size_gib;
   } accounts;
 
   struct {

@@ -941,7 +941,7 @@ clean_overruns( fd_snapmk_t * ctx ) {
     __atomic_store_n( &slot->seq, pos+FD_BACKUP_OVERRUN_DEPTH-1U, __ATOMIC_RELEASE );
     q->tail = pos+1U;
 
-    fd_backup_visited_remove( ctx->visited_set, (ulong)acc_idx );
+    fd_backup_visited_remove( ctx->visited_set, fd_backup_accidx_visited_idx( &ctx->acc_cache->idx, acc_idx ) );
   }
 }
 
@@ -1103,7 +1103,7 @@ snapmk_accdb_cache( fd_snapmk_t *       ctx,
   for( ulong i=0UL; i<FD_BACKUP_CACHE_PARA; i++ ) {
     uint acc_idx = frag->acc_idx[ i ];
     if( acc_idx==UINT_MAX ) continue;
-    if( FD_UNLIKELY( fd_backup_visited_test( ctx->visited_set, (ulong)acc_idx ) ) ) {
+    if( FD_UNLIKELY( fd_backup_visited_test( ctx->visited_set, fd_backup_accidx_visited_idx( &ctx->acc_cache->idx, acc_idx ) ) ) ) {
       frag->acc_idx[ i ] = UINT_MAX;
     }
   }
@@ -1112,12 +1112,12 @@ snapmk_accdb_cache( fd_snapmk_t *       ctx,
   for( ulong i=0UL; i<FD_BACKUP_CACHE_PARA; i++ ) {
     uint acc_idx = frag->acc_idx[ i ];
     if( acc_idx==UINT_MAX ) continue;
-    if( FD_UNLIKELY( fd_backup_visited_test( ctx->visited_set, (ulong)acc_idx ) ) ) {
+    if( FD_UNLIKELY( fd_backup_visited_test( ctx->visited_set, fd_backup_accidx_visited_idx( &ctx->acc_cache->idx, acc_idx ) ) ) ) {
       frag->acc_idx[ i ] = UINT_MAX;
       memset( frag->pubkey[ i ].uc, 0, sizeof(fd_pubkey_t) );
       continue;
     }
-    fd_backup_visited_insert( ctx->visited_set, (ulong)acc_idx );
+    fd_backup_visited_insert( ctx->visited_set, fd_backup_accidx_visited_idx( &ctx->acc_cache->idx, acc_idx ) );
   }
 
   /* publish a batch of cached accounts */

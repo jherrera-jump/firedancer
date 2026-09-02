@@ -1312,6 +1312,13 @@
 | <span class="metrics-name">accdb_&#8203;compaction_&#8203;requested</span> | counter | Total number of compactions requested on the account database |
 | <span class="metrics-name">accdb_&#8203;compaction_&#8203;completed</span> | counter | Total number of compactions fully completed on the account database, less than or equal to the requested amount |
 | <span class="metrics-name">accdb_&#8203;account_&#8203;relocated_&#8203;bytes</span> | counter | Total number of bytes moved in the account database during compaction |
+| <span class="metrics-name">accdb_&#8203;index_&#8203;hot_&#8203;hit</span> | counter | Account index lookups served by the hot tier |
+| <span class="metrics-name">accdb_&#8203;index_&#8203;cold_&#8203;fault</span> | counter | Account index lookups that fell through to the mmap-backed cold tier |
+| <span class="metrics-name">accdb_&#8203;index_&#8203;promotion</span> | counter | Pubkey version bundles promoted from cold to hot storage |
+| <span class="metrics-name">accdb_&#8203;index_&#8203;demotion</span> | counter | Pubkey version bundles demoted from hot to cold storage |
+| <span class="metrics-name">accdb_&#8203;index_&#8203;retry</span> | counter | Account index lookups retried after concurrent tier migration |
+| <span class="metrics-name">accdb_&#8203;index_&#8203;blocked_&#8203;migration</span> | counter | Tier migrations deferred because the bundle changed or a cache line was pinned |
+| <span class="metrics-name">accdb_&#8203;index_&#8203;admission_&#8203;stall</span> | counter | Writable account-slot reservations that waited for tier capacity |
 | <span class="metrics-name">accdb_&#8203;account_&#8203;preevicted</span><br/>{accdb_&#8203;cache_&#8203;class="<span class="metrics-enum">class0</span>"} | counter | Number of accounts preemptively evicted (written back) from the account database cache by the background preevict pass, broken down by cache size class (0-128 B) |
 | <span class="metrics-name">accdb_&#8203;account_&#8203;preevicted</span><br/>{accdb_&#8203;cache_&#8203;class="<span class="metrics-enum">class1</span>"} | counter | Number of accounts preemptively evicted (written back) from the account database cache by the background preevict pass, broken down by cache size class (129-512 B) |
 | <span class="metrics-name">accdb_&#8203;account_&#8203;preevicted</span><br/>{accdb_&#8203;cache_&#8203;class="<span class="metrics-enum">class2</span>"} | counter | Number of accounts preemptively evicted (written back) from the account database cache by the background preevict pass, broken down by cache size class (513 B-2 KiB) |

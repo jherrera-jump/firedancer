@@ -110,7 +110,8 @@ backtest_topo( config_t * config ) {
       config->firedancer.accounts.cache_size_gib*(1UL<<30UL),
       config->tiles.bundle.enabled,
       execrp_tile_cnt+3UL,
-      0UL );
+      0UL,
+      config->firedancer.accounts.index_hot_size_gib );
   FD_TEST( fd_pod_insertf_ulong( topo->props, accdb_obj->id, "accdb" ) );
 
   /**********************************************************************/

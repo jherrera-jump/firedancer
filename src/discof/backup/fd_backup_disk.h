@@ -90,10 +90,10 @@ fd_snapmk_accparse_lookup( fd_snapmk_accparse_t * parse,
                            ulong const *          file_off,
                            uint *                 acc_idx,
                            ulong                  cnt ) {
-  fd_backup_accidx_t *       idx      = &parse->idx;
-  fd_accdb_accmeta_t const * acc_pool = idx->acc_pool;
+  fd_backup_accidx_t * idx = &parse->idx;
 
   uint cur[ FD_BACKUP_DISK_PARA ]; /* chain node lane i sits on */
+  uchar hot[ FD_BACKUP_DISK_PARA ] = {0};
 
   FD_COMPILER_MFENCE();
   FD_VOLATILE( *idx->epoch_slot ) = FD_VOLATILE_CONST( *idx->epoch );
@@ -111,9 +111,19 @@ fd_snapmk_accparse_lookup( fd_snapmk_accparse_t * parse,
     any = 0;
     for( ulong i=0UL; i<cnt; i++ ) {
       uint ele = cur[ i ];
-      if( !fd_backup_accidx_valid( idx, ele ) ) continue; /* lane retired */
+      if( ele==UINT_MAX ) {
+        if( idx->tiered && !hot[ i ] && acc_idx[ i ]==UINT_MAX ) {
+          hot[ i ] = 1U;
+          cur[ i ] = FD_VOLATILE_CONST( idx->hot_map[ chain_idx[ i ] & idx->hot_chain_mask ] );
+          any |= cur[ i ]!=UINT_MAX;
+        }
+        continue;
+      }
 
-      fd_accdb_accmeta_t const * m = &acc_pool[ ele ];
+      uint ref = fd_accdb_acc_ref( ele, hot[ i ] );
+      if( !fd_backup_accidx_valid( idx, ref ) ) { cur[ i ]=UINT_MAX; continue; }
+
+      fd_accdb_accmeta_t const * m = fd_backup_accidx_meta( idx, ref );
       uint  next = FD_VOLATILE_CONST( m->map.next       );
       uint  gen  = FD_VOLATILE_CONST( m->key.generation );
       ulong off  = FD_VOLATILE_CONST( m->offset_fork    );
@@ -121,14 +131,21 @@ fd_snapmk_accparse_lookup( fd_snapmk_accparse_t * parse,
 
       int hit = fd_backup_accidx_rooted( idx, gen, lam )
               & ( ( off & FD_ACCDB_OFF_MASK )==file_off[ i ] );
-      fd_uint_store_if( hit, &acc_idx[ i ], ele );
+      fd_uint_store_if( hit, &acc_idx[ i ], ref );
 
       /* Resolving hit and next in the same pass keeps the next node
          prefetch to the lanes that will actually use it. */
-      int cont = (!hit) & fd_backup_accidx_valid( idx, next );
+      uint next_ref = fd_accdb_acc_ref( next, hot[ i ] );
+      int cont = (!hit) & fd_backup_accidx_valid( idx, next_ref );
       cur[ i ] = fd_uint_if( cont, next, UINT_MAX );
+      if( !hit && !cont && idx->tiered && !hot[ i ] ) {
+        hot[ i ] = 1U;
+        cur[ i ] = FD_VOLATILE_CONST( idx->hot_map[ chain_idx[ i ] & idx->hot_chain_mask ] );
+        cont = cur[ i ]!=UINT_MAX;
+        next_ref = cont ? fd_accdb_acc_ref( cur[ i ], 1 ) : UINT_MAX;
+      }
       any     |= cont;
-      __builtin_prefetch( &acc_pool[ next & (uint)(-cont) ], 0, 3 );
+      if( cont ) __builtin_prefetch( fd_backup_accidx_meta( idx, next_ref ), 0, 3 );
     }
   } while( any );
 
@@ -140,7 +157,7 @@ fd_snapmk_accparse_lookup( fd_snapmk_accparse_t * parse,
   for( ulong i=0UL; i<cnt; i++ ) {
     uint ele = acc_idx[ i ];
     if( FD_UNLIKELY( ele==UINT_MAX ) ) continue;
-    if( FD_UNLIKELY( fd_backup_visited_test_and_set( parse->visited_set, (ulong)ele ) ) ) {
+    if( FD_UNLIKELY( fd_backup_visited_test_and_set( parse->visited_set, fd_backup_accidx_visited_idx( idx, ele ) ) ) ) {
       acc_idx[ i ] = UINT_MAX;
     }
   }

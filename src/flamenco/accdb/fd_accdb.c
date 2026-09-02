@@ -30,6 +30,7 @@ ulong fd_accdb_dbg_reloc_cnt;
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/uio.h>
+#include <sys/mman.h>
 
 struct fd_accdb_fork {
   fd_accdb_fork_shmem_t * shmem;
@@ -44,6 +45,7 @@ typedef struct fd_accdb_fork fd_accdb_fork_t;
 
 struct __attribute__((aligned(FD_ACCDB_ALIGN))) fd_accdb_private {
   int fd;
+  int readonly;
 
   int acquire_state;
 
@@ -55,6 +57,13 @@ struct __attribute__((aligned(FD_ACCDB_ALIGN))) fd_accdb_private {
   fd_accdb_accmeta_t * acc_pool;
   acc_pool_t acc_pool_join[1];
   uint * acc_map;
+  uint * hot_map;
+  uint * hot_txn_idx;
+  uchar * hot_heat;
+
+  void *                 cold_mapping;
+  fd_accdb_accmeta_t *   cold_pool;
+  uint *                 cold_txn_idx;
 
   uchar * cache [ FD_ACCDB_CACHE_CLASS_CNT ];
 
@@ -131,6 +140,266 @@ struct __attribute__((aligned(FD_ACCDB_ALIGN))) fd_accdb_private {
     ulong partition_idx; /* set while num_ops>0 */
   } write_stats __attribute__((aligned(64)));
 };
+
+static inline int
+accdb_index_enabled( fd_accdb_t const * accdb ) {
+  return !!accdb->shmem->index_hot_size_gib;
+}
+
+static inline fd_accdb_accmeta_t *
+acc_ref_meta( fd_accdb_t *       accdb,
+              fd_accdb_acc_ref_t ref ) {
+  if( FD_UNLIKELY( fd_accdb_acc_ref_is_null( ref ) ) ) return NULL;
+  uint idx = fd_accdb_acc_ref_idx( ref );
+  return fd_accdb_acc_ref_is_hot( ref ) ? &accdb->acc_pool[ idx ] : (accdb_index_enabled( accdb ) ? &accdb->cold_pool[ idx ] : &accdb->acc_pool[ idx ]);
+}
+
+static inline fd_accdb_accmeta_t const *
+acc_ref_meta_const( fd_accdb_t const * accdb,
+                    fd_accdb_acc_ref_t ref ) {
+  return acc_ref_meta( (fd_accdb_t *)accdb, ref );
+}
+
+static inline uint *
+acc_ref_map( fd_accdb_t *       accdb,
+             fd_accdb_acc_ref_t ref ) {
+  return fd_accdb_acc_ref_is_hot( ref ) ? accdb->hot_map : accdb->acc_map;
+}
+
+static inline ulong
+acc_ref_chain_cnt( fd_accdb_t const * accdb,
+                   int                hot ) {
+  return hot ? accdb->shmem->hot_chain_cnt : accdb->shmem->chain_cnt;
+}
+
+static inline fd_accdb_acc_ref_t
+acc_ref_next( fd_accdb_t const * accdb,
+              fd_accdb_acc_ref_t ref ) {
+  uint next = FD_VOLATILE_CONST( acc_ref_meta_const( accdb, ref )->map.next );
+  return next==UINT_MAX ? FD_ACCDB_ACC_REF_NULL : fd_accdb_acc_ref( next, fd_accdb_acc_ref_is_hot( ref ) );
+}
+
+static inline uint *
+acc_ref_txn_slot( fd_accdb_t *       accdb,
+                  fd_accdb_acc_ref_t ref ) {
+  uint idx = fd_accdb_acc_ref_idx( ref );
+  return fd_accdb_acc_ref_is_hot( ref ) ? &accdb->hot_txn_idx[ idx ] : &accdb->cold_txn_idx[ idx ];
+}
+
+static __attribute__((unused)) fd_accdb_acc_ref_t
+cold_pool_acquire( fd_accdb_t * accdb ) {
+  fd_accdb_shmem_t * shmem = accdb->shmem;
+  for(;;) {
+    ulong old = FD_VOLATILE_CONST( shmem->cold_free_ver_top );
+    uint idx = (uint)old;
+    if( idx==UINT_MAX ) break;
+    uint next = FD_VOLATILE_CONST( accdb->cold_pool[ idx ].pool.next );
+    ulong neu = ((old+(1UL<<32)) & 0xFFFFFFFF00000000UL) | (ulong)next;
+    if( FD_LIKELY( FD_ATOMIC_CAS( &shmem->cold_free_ver_top, old, neu )==old ) ) {
+      accdb->cold_txn_idx[ idx ] = 0U;
+      return idx;
+    }
+    FD_SPIN_PAUSE();
+  }
+  ulong idx = FD_ATOMIC_FETCH_AND_ADD( &shmem->cold_highwater, 1UL );
+  if( FD_UNLIKELY( idx>=shmem->max_accounts ) ) {
+    FD_ATOMIC_FETCH_AND_SUB( &shmem->cold_highwater, 1UL );
+    return FD_ACCDB_ACC_REF_NULL;
+  }
+  accdb->cold_txn_idx[ idx ] = 0U;
+  return (fd_accdb_acc_ref_t)idx;
+}
+
+static __attribute__((unused)) void
+cold_pool_release( fd_accdb_t *       accdb,
+                   fd_accdb_acc_ref_t ref ) {
+  uint idx = fd_accdb_acc_ref_idx( ref );
+  for(;;) {
+    ulong old = FD_VOLATILE_CONST( accdb->shmem->cold_free_ver_top );
+    accdb->cold_pool[ idx ].pool.next = (uint)old;
+    ulong neu = ((old+(1UL<<32)) & 0xFFFFFFFF00000000UL) | (ulong)idx;
+    if( FD_LIKELY( FD_ATOMIC_CAS( &accdb->shmem->cold_free_ver_top, old, neu )==old ) ) return;
+    FD_SPIN_PAUSE();
+  }
+}
+
+static fd_accdb_acc_ref_t
+acc_ref_acquire( fd_accdb_t * accdb,
+                 int          hot,
+                 int          allow_hot_emergency ) {
+  if( FD_UNLIKELY( accdb_index_enabled( accdb ) && !hot ) ) return cold_pool_acquire( accdb );
+
+  if( FD_UNLIKELY( accdb_index_enabled( accdb ) ) ) {
+    ulong limit = accdb->shmem->hot_max - (allow_hot_emergency ? 0UL : accdb->shmem->hot_emergency_reserve);
+    for(;;) {
+      ulong used = FD_VOLATILE_CONST( accdb->shmem->hot_used );
+      if( FD_UNLIKELY( used>=limit ) ) return FD_ACCDB_ACC_REF_NULL;
+      if( FD_LIKELY( FD_ATOMIC_CAS( &accdb->shmem->hot_used, used, used+1UL )==used ) ) break;
+      FD_SPIN_PAUSE();
+    }
+  }
+
+  fd_accdb_accmeta_t * m = acc_pool_acquire( accdb->acc_pool_join );
+  if( FD_UNLIKELY( !m ) ) {
+    if( accdb_index_enabled( accdb ) ) FD_ATOMIC_FETCH_AND_SUB( &accdb->shmem->hot_used, 1UL );
+    return FD_ACCDB_ACC_REF_NULL;
+  }
+  uint idx = (uint)acc_pool_idx( accdb->acc_pool_join, m );
+  if( accdb_index_enabled( accdb ) ) {
+    accdb->hot_txn_idx[ idx ] = 0U;
+    accdb->hot_heat[ idx ] = 0U;
+  }
+  return fd_accdb_acc_ref( idx, accdb_index_enabled( accdb ) );
+}
+
+static void
+acc_ref_release( fd_accdb_t *       accdb,
+                 fd_accdb_acc_ref_t ref ) {
+  if( FD_UNLIKELY( accdb_index_enabled( accdb ) && !fd_accdb_acc_ref_is_hot( ref ) ) ) cold_pool_release( accdb, ref );
+  else {
+    acc_pool_release( accdb->acc_pool_join, acc_ref_meta( accdb, ref ) );
+    if( accdb_index_enabled( accdb ) ) FD_ATOMIC_FETCH_AND_SUB( &accdb->shmem->hot_used, 1UL );
+  }
+}
+
+static inline fd_accdb_index_stripe_t *
+index_stripe( fd_accdb_t * accdb,
+              uchar const  pubkey[ 32 ] ) {
+  return &accdb->shmem->index_stripe[ fd_hash32( pubkey, accdb->shmem->seed ) & (FD_ACCDB_INDEX_STRIPE_CNT-1UL) ];
+}
+
+static inline void
+index_stripe_lock( fd_accdb_index_stripe_t * stripe ) {
+  spin_lock_acquire( (int *)&stripe->lock );
+  FD_ATOMIC_FETCH_AND_ADD( &stripe->seq, 1U ); /* odd */
+  FD_COMPILER_MFENCE();
+}
+
+static inline void
+index_stripe_unlock( fd_accdb_index_stripe_t * stripe ) {
+  FD_COMPILER_MFENCE();
+  FD_ATOMIC_FETCH_AND_ADD( &stripe->seq, 1U ); /* even */
+  spin_lock_release( (int *)&stripe->lock );
+}
+
+static ulong
+prefetch_enqueue( fd_accdb_t *          accdb,
+                  ulong                 pubkey_cnt,
+                  uchar const * const * pubkeys ) {
+  if( FD_UNLIKELY( !accdb_index_enabled( accdb ) || accdb->readonly || !pubkey_cnt ) ) return 0UL;
+  if( FD_UNLIKELY( FD_ATOMIC_CAS( &accdb->shmem->prefetch_lock, 0, 1 ) ) ) return 0UL;
+  uint head = accdb->shmem->prefetch_head;
+  uint tail = FD_VOLATILE_CONST( accdb->shmem->prefetch_tail );
+  ulong accepted = 0UL;
+  while( accepted<pubkey_cnt && (uint)(head-tail)<FD_ACCDB_PREFETCH_DEPTH ) {
+    fd_memcpy( accdb->shmem->prefetch_key[ head & (FD_ACCDB_PREFETCH_DEPTH-1UL) ], pubkeys[ accepted ], 32UL );
+    head++;
+    accepted++;
+  }
+  FD_COMPILER_MFENCE();
+  FD_VOLATILE( accdb->shmem->prefetch_head ) = head;
+  spin_lock_release( &accdb->shmem->prefetch_lock );
+  return accepted;
+}
+
+ulong
+fd_accdb_prefetch( fd_accdb_t *          accdb,
+                   ulong                 pubkey_cnt,
+                   uchar const * const * pubkeys ) {
+  return prefetch_enqueue( accdb, pubkey_cnt, pubkeys );
+}
+
+static inline void
+prefetch_admit_cold( fd_accdb_t * accdb,
+                     uchar const  pubkey[ 32 ] ) {
+  if( FD_UNLIKELY( !accdb_index_enabled( accdb ) || accdb->readonly ) ) return;
+  ulong h = fd_hash32( pubkey, accdb->shmem->seed );
+  uchar * ctr = &accdb->shmem->admission[ h & (FD_ACCDB_ADMISSION_CNT-1UL) ];
+  uchar old = FD_ATOMIC_FETCH_AND_ADD( ctr, (uchar)1 );
+  if( old ) {
+    FD_VOLATILE( *ctr ) = 0U;
+    uchar const * keys[1] = { pubkey };
+    (void)prefetch_enqueue( accdb, 1UL, keys );
+  }
+}
+
+/* Locate the visible version for one acquire request and return the
+   migration sequence under which it was observed.  A matching pubkey in
+   hot storage makes that tier authoritative even when none of its fork
+   versions is visible to this fork. */
+static fd_accdb_accmeta_t *
+index_lookup_acquire( fd_accdb_t *          accdb,
+                      fd_accdb_fork_t const * fork,
+                      fd_accdb_fork_id_t    fork_id,
+                      uint                  root_generation,
+                      uchar const           pubkey[ 32 ],
+                      fd_accdb_acc_ref_t *  out_ref,
+                      ulong *               out_map_idx,
+                      uint *                out_seq ) {
+  fd_accdb_index_stripe_t * stripe = accdb_index_enabled( accdb ) ? index_stripe( accdb, pubkey ) : NULL;
+
+  for(;;) {
+    uint seq = stripe ? FD_VOLATILE_CONST( stripe->seq ) : 0U;
+    if( FD_UNLIKELY( seq&1U ) ) { FD_SPIN_PAUSE(); continue; }
+
+    fd_accdb_accmeta_t * result = NULL;
+    fd_accdb_acc_ref_t   ref    = FD_ACCDB_ACC_REF_NULL;
+    int hot_bundle = 0;
+    ulong hot_hash = 0UL;
+
+    if( stripe ) {
+      hot_hash = fd_hash32( pubkey, accdb->shmem->seed ) & (accdb->shmem->hot_chain_cnt-1UL);
+      uint cur = FD_VOLATILE_CONST( accdb->hot_map[ hot_hash ] );
+      while( cur!=UINT_MAX ) {
+        fd_accdb_accmeta_t * candidate = &accdb->acc_pool[ cur ];
+        uint next = FD_VOLATILE_CONST( candidate->map.next );
+        fd_racesan_hook( "accdb_acquire:post_next" );
+        if( !memcmp( pubkey, candidate->key.pubkey, 32UL ) ) {
+          hot_bundle = 1;
+          if( candidate->key.generation<=root_generation ||
+              fd_accdb_acc_fork_id(candidate)==fork_id.val ||
+              descends_set_test( fork->descends, fd_accdb_acc_fork_id(candidate) ) ) {
+            result = candidate;
+            ref    = fd_accdb_acc_ref( cur, 1 );
+            break;
+          }
+        }
+        cur = next;
+      }
+    }
+
+    ulong cold_hash = fd_hash32( pubkey, accdb->shmem->seed ) & (accdb->shmem->chain_cnt-1UL);
+    if( !result && !hot_bundle ) {
+      fd_accdb_accmeta_t * pool = stripe ? accdb->cold_pool : accdb->acc_pool;
+      uint cur = FD_VOLATILE_CONST( accdb->acc_map[ cold_hash ] );
+      while( cur!=UINT_MAX ) {
+        fd_accdb_accmeta_t * candidate = &pool[ cur ];
+        uint next = FD_VOLATILE_CONST( candidate->map.next );
+        fd_racesan_hook( "accdb_acquire:post_next" );
+        if( (candidate->key.generation<=root_generation ||
+             fd_accdb_acc_fork_id(candidate)==fork_id.val ||
+             descends_set_test( fork->descends, fd_accdb_acc_fork_id(candidate) )) &&
+            !memcmp( pubkey, candidate->key.pubkey, 32UL ) ) {
+          result = candidate;
+          ref    = fd_accdb_acc_ref( cur, 0 );
+          break;
+        }
+        cur = next;
+      }
+    }
+
+    FD_COMPILER_MFENCE();
+    if( FD_UNLIKELY( stripe && FD_VOLATILE_CONST( stripe->seq )!=seq ) ) {
+      FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_retries, 1UL );
+      continue;
+    }
+
+    *out_ref     = ref;
+    *out_map_idx = stripe && (result ? fd_accdb_acc_ref_is_hot( ref ) : hot_bundle) ? hot_hash : cold_hash;
+    *out_seq     = seq;
+    return result;
+  }
+}
 
 static inline fd_accdb_cache_line_t *
 cache_line( fd_accdb_t * accdb,
@@ -236,6 +505,7 @@ void *
 fd_accdb_new( void *              ljoin,
               fd_accdb_shmem_t *  shmem,
               int                 fd,
+              int                 index_fd,
               ulong               external_epoch_cnt,
               ulong const **      external_epoch_slots ) {
   if( FD_UNLIKELY( !ljoin ) ) {
@@ -253,6 +523,11 @@ fd_accdb_new( void *              ljoin,
     return NULL;
   }
 
+  if( FD_UNLIKELY( shmem->index_hot_size_gib && index_fd<0 ) ) {
+    FD_LOG_WARNING(( "index_fd must be valid when the disjoint index is enabled" ));
+    return NULL;
+  }
+
   ulong max_live_slots = shmem->max_live_slots;
   ulong max_accounts = shmem->max_accounts;
   ulong max_account_writes_per_slot = shmem->max_account_writes_per_slot;
@@ -266,7 +541,10 @@ fd_accdb_new( void *              ljoin,
   void * _fork_pool_ele    = FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_accdb_fork_shmem_t), max_live_slots*sizeof(fd_accdb_fork_shmem_t)            );
   void * _descends_sets    = FD_SCRATCH_ALLOC_APPEND( l, descends_set_align(),           max_live_slots*descends_set_footprint( max_live_slots ) );
   void * _acc_map          = FD_SCRATCH_ALLOC_APPEND( l, alignof(uint),                  chain_cnt*sizeof(uint)                                  );
-  void * _acc_pool_ele     = FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_accdb_accmeta_t),        max_accounts*sizeof(fd_accdb_accmeta_t)             );
+  void * _hot_map          = shmem->index_hot_size_gib ? FD_SCRATCH_ALLOC_APPEND( l, alignof(uint), shmem->hot_chain_cnt*sizeof(uint) ) : NULL;
+  void * _acc_pool_ele     = FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_accdb_accmeta_t),    shmem->hot_max*sizeof(fd_accdb_accmeta_t)               );
+  void * _hot_txn_idx      = shmem->index_hot_size_gib ? FD_SCRATCH_ALLOC_APPEND( l, alignof(uint),  shmem->hot_max*sizeof(uint)  ) : NULL;
+  void * _hot_heat         = shmem->index_hot_size_gib ? FD_SCRATCH_ALLOC_APPEND( l, alignof(uchar), shmem->hot_max*sizeof(uchar) ) : NULL;
   void * _txn_pool_ele     = FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_accdb_txn_t),        txn_max*sizeof(fd_accdb_txn_t)                          );
   void * _partition_pool   = FD_SCRATCH_ALLOC_APPEND( l, partition_pool_align(),         partition_pool_footprint( partition_cnt )               );
   void * _compaction_dlists[ FD_ACCDB_COMPACTION_LAYER_CNT ];
@@ -280,13 +558,28 @@ fd_accdb_new( void *              ljoin,
   void * _local_fork_pool = FD_SCRATCH_ALLOC_APPEND( l2, alignof(fd_accdb_fork_t), max_live_slots*sizeof(fd_accdb_fork_t) );
 
   accdb->fd = fd;
+  accdb->readonly = 0;
   accdb->acquire_state = FD_ACCDB_ACQUIRE_STATE_IDLE;
   accdb->snapshot_loading = 0;
 
   accdb->shmem = (fd_accdb_shmem_t *)shmem;
-  FD_TEST( acc_pool_join( accdb->acc_pool_join, shmem->acc_pool, _acc_pool_ele, max_accounts ) );
+  FD_TEST( acc_pool_join( accdb->acc_pool_join, shmem->acc_pool, _acc_pool_ele, shmem->hot_max ) );
   accdb->acc_pool = accdb->acc_pool_join->ele;
   accdb->acc_map = _acc_map;
+  accdb->hot_map = _hot_map;
+  accdb->hot_txn_idx = _hot_txn_idx;
+  accdb->hot_heat = _hot_heat;
+  accdb->cold_mapping = NULL;
+  accdb->cold_pool = accdb->acc_pool;
+  accdb->cold_txn_idx = NULL;
+  if( shmem->index_hot_size_gib ) {
+    void * mapping = mmap( NULL, shmem->cold_idx_file_sz, PROT_READ|PROT_WRITE, MAP_SHARED, index_fd, 0 );
+    if( FD_UNLIKELY( mapping==MAP_FAILED ) ) FD_LOG_ERR(( "mmap(accounts.db.idx) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+    accdb->cold_mapping = mapping;
+    accdb->cold_pool = (fd_accdb_accmeta_t *)mapping;
+    accdb->cold_txn_idx = (uint *)( (uchar *)mapping + shmem->cold_txn_idx_file_off );
+    (void)madvise( mapping, shmem->cold_idx_file_sz, MADV_RANDOM );
+  }
   FD_TEST( txn_pool_join( accdb->txn_pool, shmem->txn_pool, _txn_pool_ele, txn_max ) );
   for( ulong c=0UL; c<FD_ACCDB_CACHE_CLASS_CNT; c++ ) accdb->cache[ c ] = (uchar *)shmem + shmem->cache_region_off[ c ];
   accdb->partition_pool = partition_pool_join( _partition_pool );
@@ -346,6 +639,28 @@ fd_accdb_reset( fd_accdb_t * accdb ) {
      partition_pool rebuild their free lists in O(max_live_slots) and
      O(partition_cnt), both small. */
   acc_pool_reset( accdb->acc_pool_join );
+  if( shmem->index_hot_size_gib ) {
+    ulong cold_highwater = FD_VOLATILE_CONST( shmem->cold_highwater );
+    ulong cold_meta_sz   = fd_ulong_align_up( cold_highwater*sizeof(fd_accdb_accmeta_t), 4096UL );
+    ulong cold_txn_sz    = fd_ulong_align_up( cold_highwater*sizeof(uint), 4096UL );
+    if( cold_meta_sz ) (void)madvise( accdb->cold_mapping, cold_meta_sz, MADV_DONTNEED );
+    if( cold_txn_sz  ) (void)madvise( (uchar *)accdb->cold_mapping+shmem->cold_txn_idx_file_off, cold_txn_sz, MADV_DONTNEED );
+    shmem->cold_highwater    = 0UL;
+    shmem->cold_free_ver_top = (ulong)UINT_MAX;
+    shmem->hot_used          = 0UL;
+    shmem->hot_clock_hand    = 0UL;
+    shmem->prefetch_head     = 0U;
+    shmem->prefetch_tail     = 0U;
+    shmem->migration_retire_cnt = 0U;
+    fd_memset( shmem->admission, 0, sizeof(shmem->admission) );
+    for( ulong i=0UL; i<FD_ACCDB_INDEX_STRIPE_CNT; i++ ) {
+      shmem->index_stripe[ i ].lock = 0U;
+      shmem->index_stripe[ i ].seq  = 0U;
+    }
+    fd_memset( accdb->hot_map, 0xFF, shmem->hot_chain_cnt*sizeof(uint) );
+    fd_memset( accdb->hot_txn_idx, 0, shmem->hot_max*sizeof(uint) );
+    fd_memset( accdb->hot_heat, 0, shmem->hot_max*sizeof(uchar) );
+  }
   txn_pool_reset( accdb->txn_pool );
   fork_pool_reset( accdb->fork_shmem_pool );
   partition_pool_reset( accdb->partition_pool );
@@ -450,6 +765,7 @@ fd_accdb_snapshot_load_begin( fd_accdb_t * accdb ) {
                  "snapshot load started while snapshot production active" );
   accdb->snapshot_loading = 1;
   FD_VOLATILE( accdb->shmem->snapshot_loading ) = 1;
+  if( accdb_index_enabled( accdb ) ) (void)madvise( accdb->cold_mapping, accdb->shmem->cold_idx_file_sz, MADV_SEQUENTIAL );
 }
 
 static inline void
@@ -481,6 +797,15 @@ fd_accdb_snapshot_load_end( fd_accdb_t * accdb ) {
 
   accdb->snapshot_loading = 0;
   FD_VOLATILE( accdb->shmem->snapshot_loading ) = 0;
+
+  if( accdb_index_enabled( accdb ) ) {
+    ulong highwater = FD_VOLATILE_CONST( accdb->shmem->cold_highwater );
+    ulong meta_used = fd_ulong_align_up( highwater*sizeof(fd_accdb_accmeta_t), 4096UL );
+    ulong txn_used  = fd_ulong_align_up( highwater*sizeof(uint), 4096UL );
+    if( meta_used ) (void)madvise( accdb->cold_mapping, meta_used, MADV_DONTNEED );
+    if( txn_used  ) (void)madvise( (uchar *)accdb->cold_mapping+accdb->shmem->cold_txn_idx_file_off, txn_used, MADV_DONTNEED );
+    (void)madvise( accdb->cold_mapping, accdb->shmem->cold_idx_file_sz, MADV_RANDOM );
+  }
 
   /* Sweep all partitions written during the load — any that crossed
      the fragmentation threshold while enqueue was suppressed are
@@ -535,7 +860,7 @@ fd_accdb_snapshot_recover_delta( fd_accdb_t *       accdb,
   uint txn_idx = accdb->fork_pool[ fork_id.val ].shmem->txn_head;
   while( txn_idx!=UINT_MAX ) {
     fd_accdb_txn_t const * txn = txn_pool_ele( accdb->txn_pool, (ulong)txn_idx );
-    fd_accdb_accmeta_t const * acc = &accdb->acc_pool[ txn->acc_pool_idx ];
+    fd_accdb_accmeta_t const * acc = acc_ref_meta_const( accdb, txn->acc_pool_idx );
     if( FD_UNLIKELY( !delta_insert( accdb, acc->key.pubkey ) ) ) return -1;
     txn_idx = txn->fork.next;
   }
@@ -651,7 +976,8 @@ fd_accdb_t *
 fd_accdb_join_readonly( void *             ljoin,
                         fd_accdb_shmem_t * shmem,
                         ulong *            my_epoch_slot_rw,
-                        int                fd_ro ) {
+                        int                fd_ro,
+                        int                index_fd_ro ) {
   if( FD_UNLIKELY( !ljoin ) ) {
     FD_LOG_WARNING(( "NULL ljoin" ));
     return NULL;
@@ -664,6 +990,16 @@ fd_accdb_join_readonly( void *             ljoin,
 
   if( FD_UNLIKELY( !my_epoch_slot_rw ) ) {
     FD_LOG_WARNING(( "NULL my_epoch_slot_rw" ));
+    return NULL;
+  }
+
+  if( FD_UNLIKELY( fd_ro<0 ) ) {
+    FD_LOG_WARNING(( "fd_ro must be a valid file descriptor" ));
+    return NULL;
+  }
+
+  if( FD_UNLIKELY( shmem->index_hot_size_gib && index_fd_ro<0 ) ) {
+    FD_LOG_WARNING(( "index_fd_ro must be valid when the disjoint index is enabled" ));
     return NULL;
   }
 
@@ -683,7 +1019,10 @@ fd_accdb_join_readonly( void *             ljoin,
   void * _fork_pool_ele    = FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_accdb_fork_shmem_t), max_live_slots*sizeof(fd_accdb_fork_shmem_t)            );
   void * _descends_sets    = FD_SCRATCH_ALLOC_APPEND( l, descends_set_align(),           max_live_slots*descends_set_footprint( max_live_slots ) );
   void * _acc_map          = FD_SCRATCH_ALLOC_APPEND( l, alignof(uint),                  chain_cnt*sizeof(uint)                                  );
-  void * _acc_pool_ele     = FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_accdb_accmeta_t),    max_accounts*sizeof(fd_accdb_accmeta_t)                 );
+  void * _hot_map          = shmem->index_hot_size_gib ? FD_SCRATCH_ALLOC_APPEND( l, alignof(uint), shmem->hot_chain_cnt*sizeof(uint) ) : NULL;
+  void * _acc_pool_ele     = FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_accdb_accmeta_t),    shmem->hot_max*sizeof(fd_accdb_accmeta_t)               );
+  void * _hot_txn_idx      = shmem->index_hot_size_gib ? FD_SCRATCH_ALLOC_APPEND( l, alignof(uint),  shmem->hot_max*sizeof(uint)  ) : NULL;
+  void * _hot_heat         = shmem->index_hot_size_gib ? FD_SCRATCH_ALLOC_APPEND( l, alignof(uchar), shmem->hot_max*sizeof(uchar) ) : NULL;
                              FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_accdb_txn_t),        txn_max*sizeof(fd_accdb_txn_t)                          );
                              FD_SCRATCH_ALLOC_APPEND( l, partition_pool_align(),         partition_pool_footprint( partition_cnt )               );
   for( ulong k=0UL; k<FD_ACCDB_COMPACTION_LAYER_CNT; k++ ) {
@@ -696,11 +1035,26 @@ fd_accdb_join_readonly( void *             ljoin,
   void * _local_fork_pool = FD_SCRATCH_ALLOC_APPEND( l2, alignof(fd_accdb_fork_t), max_live_slots*sizeof(fd_accdb_fork_t) );
 
   accdb->fd    = fd_ro;
+  accdb->readonly = 1;
   accdb->acquire_state = FD_ACCDB_ACQUIRE_STATE_IDLE;
   accdb->shmem = shmem;
-  FD_TEST( acc_pool_join( accdb->acc_pool_join, shmem->acc_pool, _acc_pool_ele, max_accounts ) );
+  FD_TEST( acc_pool_join( accdb->acc_pool_join, shmem->acc_pool, _acc_pool_ele, shmem->hot_max ) );
   accdb->acc_pool = accdb->acc_pool_join->ele;
   accdb->acc_map  = _acc_map;
+  accdb->hot_map  = _hot_map;
+  accdb->hot_txn_idx = _hot_txn_idx;
+  accdb->hot_heat = _hot_heat;
+  accdb->cold_mapping = NULL;
+  accdb->cold_pool = accdb->acc_pool;
+  accdb->cold_txn_idx = NULL;
+  if( shmem->index_hot_size_gib ) {
+    void * mapping = mmap( NULL, shmem->cold_idx_file_sz, PROT_READ, MAP_SHARED, index_fd_ro, 0 );
+    if( FD_UNLIKELY( mapping==MAP_FAILED ) ) FD_LOG_ERR(( "mmap(accounts.db.idx read-only) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+    accdb->cold_mapping = mapping;
+    accdb->cold_pool = (fd_accdb_accmeta_t *)mapping;
+    accdb->cold_txn_idx = (uint *)( (uchar *)mapping + shmem->cold_txn_idx_file_off );
+    (void)madvise( mapping, shmem->cold_idx_file_sz, MADV_RANDOM );
+  }
   for( ulong c=0UL; c<FD_ACCDB_CACHE_CLASS_CNT; c++ ) accdb->cache[ c ] = (uchar *)shmem + shmem->cache_region_off[ c ];
 
   /* Writer-only structures: leave NULL so any accidental writer-path
@@ -1022,8 +1376,7 @@ drain_deferred_frees( fd_accdb_t * accdb ) {
      of these accs at unlink time have now exited their epoch sections.
      It is safe to materialize pool.next links and hand the chain to
      acc_pool_release_chain. */
-  uint *               buf      = accdb->deferred_acc_buf;
-  fd_accdb_accmeta_t * acc_pool = accdb->acc_pool;
+  uint * buf = accdb->deferred_acc_buf;
 
   /* Late-publish sweep: a concurrent acquire evictor may have published
      a new offset into one of these accmetas after acc_unlink's
@@ -1031,10 +1384,11 @@ drain_deferred_frees( fd_accdb_t * accdb ) {
      drained, any such publish is complete and visible.  Free the
      orphaned disk bytes here, before the accmeta is released to the
      pool and its fields recycled. */
-  ulong acc_pool_cap = acc_pool_ele_max( accdb->acc_pool_join );
   for( ulong i=0UL; i<n; i++ ) {
-    FD_TEST( (ulong)buf[ i ]<acc_pool_cap );
-    fd_accdb_accmeta_t * accmeta = &acc_pool[ buf[ i ] ];
+    fd_accdb_acc_ref_t ref = buf[ i ];
+    FD_TEST( fd_accdb_acc_ref_is_hot( ref ) ? (ulong)fd_accdb_acc_ref_idx( ref )<accdb->shmem->hot_max
+                                             : (ulong)fd_accdb_acc_ref_idx( ref )<accdb->shmem->max_accounts );
+    fd_accdb_accmeta_t * accmeta = acc_ref_meta( accdb, ref );
     ulong off = fd_accdb_acc_offset( accmeta );
     if( FD_UNLIKELY( off!=FD_ACCDB_OFF_INVAL ) ) {
       ulong entry_sz = (ulong)FD_ACCDB_SIZE_DATA(accmeta->executable_size)+sizeof(fd_accdb_disk_meta_t);
@@ -1042,13 +1396,11 @@ drain_deferred_frees( fd_accdb_t * accdb ) {
       FD_ATOMIC_FETCH_AND_SUB( &accdb->shmem->shmetrics->disk_used_bytes, entry_sz );
     }
   }
-
-  for( ulong i=0UL; i+1UL<n; i++ ) {
-    acc_pool[ buf[ i ] ].pool.next = acc_pool_private_cidx( (ulong)buf[ i+1UL ] );
+  for( ulong i=0UL; i<n; i++ ) {
+    fd_accdb_acc_ref_t ref = buf[ i ];
+    if( accdb_index_enabled( accdb ) ) *acc_ref_txn_slot( accdb, ref ) = 0U;
+    acc_ref_release( accdb, ref );
   }
-  fd_accdb_accmeta_t * head = &acc_pool[ buf[ 0UL ] ];
-  fd_accdb_accmeta_t * tail = &acc_pool[ buf[ n-1UL ] ];
-  acc_pool_release_chain( accdb->acc_pool_join, head, tail );
   accdb->shmem->deferred_acc_buf_cnt = 0UL;
 }
 
@@ -1087,8 +1439,12 @@ static inline void
 acc_unlink( fd_accdb_t * accdb,
             uint         map_idx,
             uint         prev,
-            uint         acc_idx ) {
-  fd_accdb_accmeta_t * accmeta = &accdb->acc_pool[ acc_idx ];
+            fd_accdb_acc_ref_t acc_ref ) {
+  int hot = fd_accdb_acc_ref_is_hot( acc_ref );
+  uint acc_idx = fd_accdb_acc_ref_idx( acc_ref );
+  fd_accdb_accmeta_t * pool = hot ? accdb->acc_pool : (accdb_index_enabled( accdb ) ? accdb->cold_pool : accdb->acc_pool);
+  uint * map = hot ? accdb->hot_map : accdb->acc_map;
+  fd_accdb_accmeta_t * accmeta = &pool[ acc_idx ];
 
   /* Atomically capture and clear the offset.  Two races to defuse:
 
@@ -1119,9 +1475,9 @@ acc_unlink( fd_accdb_t * accdb,
     /* Head removal — CAS may fail if a concurrent insert prepended a
        new node.  On failure the target is now interior. */
     for(;;) {
-      uint old_head = FD_VOLATILE_CONST( accdb->acc_map[ map_idx ] );
+      uint old_head = FD_VOLATILE_CONST( map[ map_idx ] );
       if( FD_LIKELY( old_head==acc_idx ) ) {
-        if( FD_LIKELY( FD_ATOMIC_CAS( &accdb->acc_map[ map_idx ], acc_idx, accmeta->map.next )==acc_idx ) ) break;
+        if( FD_LIKELY( FD_ATOMIC_CAS( &map[ map_idx ], acc_idx, accmeta->map.next )==acc_idx ) ) break;
         FD_SPIN_PAUSE();
         continue;
       }
@@ -1129,12 +1485,12 @@ acc_unlink( fd_accdb_t * accdb,
          removal.  The target must still be in the chain because only
          this thread removes elements. */
       prev = old_head;
-      while( FD_VOLATILE_CONST( accdb->acc_pool[ prev ].map.next )!=acc_idx ) prev = FD_VOLATILE_CONST( accdb->acc_pool[ prev ].map.next );
-      FD_ATOMIC_CAS( &accdb->acc_pool[ prev ].map.next, acc_idx, accmeta->map.next );
+      while( FD_VOLATILE_CONST( pool[ prev ].map.next )!=acc_idx ) prev = FD_VOLATILE_CONST( pool[ prev ].map.next );
+      FD_ATOMIC_CAS( &pool[ prev ].map.next, acc_idx, accmeta->map.next );
       break;
     }
   } else {
-    FD_ATOMIC_CAS( &accdb->acc_pool[ prev ].map.next, acc_idx, accmeta->map.next );
+    FD_ATOMIC_CAS( &pool[ prev ].map.next, acc_idx, accmeta->map.next );
   }
 
   fd_racesan_hook( "accdb_acc_unlink:post_splice" );
@@ -1299,20 +1655,24 @@ purge_inner( fd_accdb_t *              accdb,
     while( txn!=UINT_MAX ) {
       fd_accdb_txn_t * txne = txn_pool_ele( accdb->txn_pool, (ulong)txn );
 
-      uint acc_idx     = txne->acc_pool_idx;
-      uint acc_map_idx = (uint)(fd_hash32( accdb->acc_pool[ acc_idx ].key.pubkey, accdb->shmem->seed ) &
-                                (accdb->shmem->chain_cnt-1UL));
+      fd_accdb_acc_ref_t acc_ref = txne->acc_pool_idx;
+      uint acc_idx = fd_accdb_acc_ref_idx( acc_ref );
+      int hot = fd_accdb_acc_ref_is_hot( acc_ref );
+      fd_accdb_accmeta_t * pool = hot ? accdb->acc_pool : (accdb_index_enabled( accdb ) ? accdb->cold_pool : accdb->acc_pool);
+      uint * map = hot ? accdb->hot_map : accdb->acc_map;
+      uint acc_map_idx = (uint)(fd_hash32( pool[ acc_idx ].key.pubkey, accdb->shmem->seed ) &
+                                (acc_ref_chain_cnt( accdb, hot )-1UL));
 
       uint prev = UINT_MAX;
-      uint cur = FD_VOLATILE_CONST( accdb->acc_map[ acc_map_idx ] );
+      uint cur = FD_VOLATILE_CONST( map[ acc_map_idx ] );
       while( cur!=acc_idx ) {
         prev = cur;
-        cur = FD_VOLATILE_CONST( accdb->acc_pool[ cur ].map.next );
+        cur = FD_VOLATILE_CONST( pool[ cur ].map.next );
       }
 
       fd_racesan_hook( "accdb_purge:pre_unlink" );
-      acc_unlink( accdb, acc_map_idx, prev, acc_idx );
-      deferred_acc_append( accdb, acc_idx );
+      acc_unlink( accdb, acc_map_idx, prev, acc_ref );
+      deferred_acc_append( accdb, acc_ref );
 
       txn_tail = txne;
       txn = txne->fork.next;
@@ -1378,22 +1738,27 @@ background_advance_root( fd_accdb_t *       accdb,
     while( txn!=UINT_MAX ) {
       fd_accdb_txn_t * txne = txn_pool_ele( accdb->txn_pool, (ulong)txn );
 
-      fd_accdb_accmeta_t const * new_acc = &accdb->acc_pool[ txne->acc_pool_idx ];
+      fd_accdb_acc_ref_t new_ref = txne->acc_pool_idx;
+      uint new_idx = fd_accdb_acc_ref_idx( new_ref );
+      int hot = fd_accdb_acc_ref_is_hot( new_ref );
+      fd_accdb_accmeta_t * pool = hot ? accdb->acc_pool : (accdb_index_enabled( accdb ) ? accdb->cold_pool : accdb->acc_pool);
+      uint * map = hot ? accdb->hot_map : accdb->acc_map;
+      fd_accdb_accmeta_t const * new_acc = &pool[ new_idx ];
       uint acc_map_idx = (uint)(fd_hash32( new_acc->key.pubkey, accdb->shmem->seed ) &
-                                (accdb->shmem->chain_cnt-1UL));
+                                (acc_ref_chain_cnt( accdb, hot )-1UL));
 
       delta_insert( accdb, new_acc->key.pubkey );
 
       uint prev          = UINT_MAX;
       uint new_acc_prev  = UINT_MAX; /* prev of new_acc on the chain when we encounter it (UINT_MAX if head or never seen) */
       int  new_acc_seen  = 0;
-      uint acc = FD_VOLATILE_CONST( accdb->acc_map[ acc_map_idx ] );
+      uint acc = FD_VOLATILE_CONST( map[ acc_map_idx ] );
       FD_TEST( acc!=UINT_MAX );
       while( acc!=UINT_MAX ) {
-        fd_accdb_accmeta_t const * cur_acc = &accdb->acc_pool[ acc ];
+        fd_accdb_accmeta_t const * cur_acc = &pool[ acc ];
         uint cur_next = FD_VOLATILE_CONST( cur_acc->map.next );
 
-        if( FD_LIKELY( acc==txne->acc_pool_idx ) ) {
+        if( FD_LIKELY( acc==new_idx ) ) {
           new_acc_prev = prev;
           new_acc_seen = 1;
           prev = acc;
@@ -1404,8 +1769,9 @@ background_advance_root( fd_accdb_t *       accdb,
         if( FD_LIKELY( (cur_acc->key.generation<=parent_fork->shmem->generation || descends_set_test( fork->descends, fd_accdb_acc_fork_id(cur_acc) ) ) && !memcmp( new_acc->key.pubkey, cur_acc->key.pubkey, 32UL ) ) ) {
           uint next = cur_next;
           fd_racesan_hook( "accdb_advance:pre_unlink" );
-          acc_unlink( accdb, acc_map_idx, prev, acc );
-          deferred_acc_append( accdb, acc );
+          fd_accdb_acc_ref_t cur_ref = fd_accdb_acc_ref( acc, hot );
+          acc_unlink( accdb, acc_map_idx, prev, cur_ref );
+          deferred_acc_append( accdb, cur_ref );
           acc = next;
         } else {
           prev = acc;
@@ -1423,9 +1789,8 @@ background_advance_root( fd_accdb_t *       accdb,
          new_acc as an "older version" - in that case new_acc_seen=0
          and we skip, since the freelist cleanup is already done. */
       if( FD_UNLIKELY( new_acc_seen && new_acc->lamports==0UL ) ) {
-        uint new_acc_idx = (uint)txne->acc_pool_idx;
-        acc_unlink( accdb, acc_map_idx, new_acc_prev, new_acc_idx );
-        deferred_acc_append( accdb, new_acc_idx );
+        acc_unlink( accdb, acc_map_idx, new_acc_prev, new_ref );
+        deferred_acc_append( accdb, new_ref );
       }
 
       txn_tail = txne;
@@ -1614,7 +1979,7 @@ acquire_cache_line( fd_accdb_t * accdb,
     fd_racesan_hook( "clock_evict:post_sentinel" );
 
     if( FD_LIKELY( line->acc_idx!=UINT_MAX ) ) {
-      evict_clear_acc_cache_ref( &accdb->acc_pool[ line->acc_idx ], size_class, hand );
+      evict_clear_acc_cache_ref( acc_ref_meta( accdb, line->acc_idx ), size_class, hand );
     }
     *out_evicted_acc_idx    = line->persisted ? UINT_MAX : line->acc_idx;
     line->key.generation    = UINT_MAX;
@@ -1825,6 +2190,30 @@ allocate_next_compaction_write( fd_accdb_t * accdb,
   return file_offset;
 }
 
+static fd_accdb_accmeta_t *
+index_find_offset( fd_accdb_t * accdb,
+                   uchar const  pubkey[ 32 ],
+                   ulong        offset_packed ) {
+  ulong offset = offset_packed & FD_ACCDB_OFF_MASK;
+  if( accdb_index_enabled( accdb ) ) {
+    uint idx = FD_VOLATILE_CONST( accdb->hot_map[ fd_hash32( pubkey, accdb->shmem->seed ) & (accdb->shmem->hot_chain_cnt-1UL) ] );
+    while( idx!=UINT_MAX ) {
+      fd_accdb_accmeta_t * candidate = &accdb->acc_pool[ idx ];
+      if( (FD_VOLATILE_CONST( candidate->offset_fork ) & FD_ACCDB_OFF_MASK)==offset ) return candidate;
+      idx = FD_VOLATILE_CONST( candidate->map.next );
+    }
+  }
+
+  fd_accdb_accmeta_t * pool = accdb_index_enabled( accdb ) ? accdb->cold_pool : accdb->acc_pool;
+  uint idx = FD_VOLATILE_CONST( accdb->acc_map[ fd_hash32( pubkey, accdb->shmem->seed ) & (accdb->shmem->chain_cnt-1UL) ] );
+  while( idx!=UINT_MAX ) {
+    fd_accdb_accmeta_t * candidate = &pool[ idx ];
+    if( (FD_VOLATILE_CONST( candidate->offset_fork ) & FD_ACCDB_OFF_MASK)==offset ) return candidate;
+    idx = FD_VOLATILE_CONST( candidate->map.next );
+  }
+  return NULL;
+}
+
 /* fd_accdb_compact relocates one record from the oldest partition
    queued for compaction at src_layer into the write head for the
    next colder tier, or the same tier for the deepest layer.  It is
@@ -1925,20 +2314,9 @@ background_compact( fd_accdb_t * accdb,
 
   /* Walk the hash chain to find a live index entry whose on-disk
      offset matches the record we are compacting. */
-  fd_accdb_accmeta_t * accmeta = NULL;
-  ulong source_packed = 0UL;
-  uint acc_idx = FD_VOLATILE_CONST( accdb->acc_map[ fd_hash32( meta->pubkey, accdb->shmem->seed )&(accdb->shmem->chain_cnt-1UL) ] );
-  while( acc_idx!=UINT_MAX ) {
-    fd_accdb_accmeta_t * candidate = &accdb->acc_pool[ acc_idx ];
-    uint next_idx = FD_VOLATILE_CONST( candidate->map.next );
-    ulong candidate_packed = FD_VOLATILE_CONST( candidate->offset_fork );
-    if( FD_LIKELY( (candidate_packed & FD_ACCDB_OFF_MASK)==compact_base+compact->compaction_offset ) ) {
-      accmeta       = candidate;
-      source_packed = candidate_packed;
-      break;
-    }
-    acc_idx = next_idx;
-  }
+  ulong source_offset = compact_base+compact->compaction_offset;
+  fd_accdb_accmeta_t * accmeta = index_find_offset( accdb, meta->pubkey, source_offset );
+  ulong source_packed = accmeta ? FD_VOLATILE_CONST( accmeta->offset_fork ) : 0UL;
 
   ulong record_sz  = sizeof(fd_accdb_disk_meta_t) + (ulong)meta->size;
   ulong bytes_copied = 0UL;
@@ -1989,14 +2367,19 @@ background_compact( fd_accdb_t * accdb,
      fd_accdb_dbg_reloc_cnt++;
 #endif
 
+     fd_accdb_index_stripe_t * stripe = accdb_index_enabled( accdb ) ? index_stripe( accdb, meta->pubkey ) : NULL;
+     if( stripe ) spin_lock_acquire( (int *)&stripe->lock );
+     if( stripe ) accmeta = index_find_offset( accdb, meta->pubkey, source_packed );
+
      fd_racesan_hook( "accdb_compact:pre_offset_cas" );
-     if( FD_UNLIKELY( FD_ATOMIC_CAS( &accmeta->offset_fork, source_packed, new_packed )!=source_packed ) ) {
+     if( FD_UNLIKELY( !accmeta || FD_ATOMIC_CAS( &accmeta->offset_fork, source_packed, new_packed )!=source_packed ) ) {
       /* Record was superseded by a concurrent overwrite commit.
          The disk space we just wrote is dead on arrival — account
          it as freed so compaction can reclaim it later. */
       fd_accdb_shmem_bytes_freed( accdb->shmem, dest_offset, record_sz );
       bytes_copied = 0UL;
-    }
+     }
+     if( stripe ) spin_lock_release( (int *)&stripe->lock );
   }
 
   fd_racesan_hook( "accdb_compact:post_relocate" );
@@ -2196,7 +2579,10 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
   fd_racesan_hook( "accdb_acquire:post_root_gen" );
 
   fd_accdb_accmeta_t * accmetas[ FD_ACCDB_MAX_ACQUIRE_CNT ];
+  fd_accdb_acc_ref_t acc_refs[ FD_ACCDB_MAX_ACQUIRE_CNT ];
+  fd_accdb_acc_ref_t reserved_refs[ FD_ACCDB_MAX_ACQUIRE_CNT ];
   ulong acc_map_idxs[ FD_ACCDB_MAX_ACQUIRE_CNT ];
+  uint index_seqs[ FD_ACCDB_MAX_ACQUIRE_CNT ];
 
   /* Walk the hash chain for each pubkey and take the first visible
      match.  Correctness relies on newer entries always being prepended
@@ -2216,26 +2602,19 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
      fd_accdb_release before the head-pointer store.  Multiple
      concurrent releases serialize on the CAS of the chain head. */
   for( ulong i=0UL; i<pubkeys_cnt; i++ ) {
-    acc_map_idxs[ i ] = fd_hash32( pubkeys[ i ], accdb->shmem->seed )&(accdb->shmem->chain_cnt-1UL);
-    uint acc = FD_VOLATILE_CONST( accdb->acc_map[ acc_map_idxs[ i ] ] );
-    while( acc!=UINT_MAX ) {
-      fd_accdb_accmeta_t const * candidate_acc = &accdb->acc_pool[ acc ];
-      uint next_acc = FD_VOLATILE_CONST( candidate_acc->map.next );
+    reserved_refs[ i ] = FD_ACCDB_ACC_REF_NULL;
+    accmetas[ i ] = index_lookup_acquire( accdb, fork, fork_id, root_generation, pubkeys[ i ],
+                                          &acc_refs[ i ], &acc_map_idxs[ i ], &index_seqs[ i ] );
 
-      fd_racesan_hook( "accdb_acquire:post_next" );
-
-      if( FD_UNLIKELY( (candidate_acc->key.generation>root_generation &&
-                        fd_accdb_acc_fork_id(candidate_acc)!=fork_id.val &&
-                        !descends_set_test( fork->descends, fd_accdb_acc_fork_id(candidate_acc) )) ) ||
-                        memcmp( pubkeys[ i ], candidate_acc->key.pubkey, 32UL ) ) {
-        acc = next_acc;
-        continue;
+    if( accdb_index_enabled( accdb ) && accmetas[ i ] ) {
+      if( fd_accdb_acc_ref_is_hot( acc_refs[ i ] ) ) {
+        FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_hot_hits, 1UL );
+        accdb->hot_heat[ fd_accdb_acc_ref_idx( acc_refs[ i ] ) ] = 1U;
+      } else {
+        FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_cold_hits, 1UL );
+        prefetch_admit_cold( accdb, pubkeys[ i ] );
       }
-
-      break;
     }
-    if( FD_UNLIKELY( acc==UINT_MAX ) )                                       accmetas[ i ] = NULL;
-    else                                                                     accmetas[ i ] = &accdb->acc_pool[ acc ];
 
 #if FD_TMPL_USE_HANDHOLDING
     if( FD_UNLIKELY( accmetas[ i ] ) ) {
@@ -2249,6 +2628,23 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
 #endif
 
     if( FD_UNLIKELY( accmetas[ i ] && !writable[ i ] && !accmetas[ i ]->lamports ) ) accmetas[ i ] = NULL;
+
+    if( writable[ i ] && (!accmetas[ i ] || accmetas[ i ]->key.generation!=fork->shmem->generation) ) {
+      int want_hot = accdb_index_enabled( accdb ) ? (accmetas[ i ] ? fd_accdb_acc_ref_is_hot( acc_refs[ i ] )
+                                                                : FD_VOLATILE_CONST( accdb->shmem->hot_used ) < accdb->shmem->hot_max-accdb->shmem->hot_emergency_reserve) : 0;
+      int allow_hot_emergency = !!(accmetas[ i ] && want_hot);
+      fd_accdb_acc_ref_t ref = acc_ref_acquire( accdb, want_hot, allow_hot_emergency );
+      if( fd_accdb_acc_ref_is_null( ref ) && accdb_index_enabled( accdb ) && !accmetas[ i ] ) {
+        ref = acc_ref_acquire( accdb, 0, 0 );
+        if( !fd_accdb_acc_ref_is_null( ref ) ) acc_map_idxs[ i ] = fd_hash32( pubkeys[ i ], accdb->shmem->seed )&(accdb->shmem->chain_cnt-1UL);
+      }
+      while( FD_UNLIKELY( fd_accdb_acc_ref_is_null( ref ) ) ) {
+        FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_admission_stalls, 1UL );
+        FD_SPIN_PAUSE();
+        ref = acc_ref_acquire( accdb, want_hot, allow_hot_emergency );
+      }
+      reserved_refs[ i ] = ref;
+    }
 
     /* Attribute this acquired account to a size class for per-class
        rate metrics.  Use the account's current size class when known;
@@ -2409,6 +2805,35 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
   for( ulong i=0UL; i<pubkeys_cnt; i++ ) {
     if( FD_UNLIKELY( !accmetas[ i ] && !writable[ i ] ) ) continue;
 
+    fd_accdb_index_stripe_t * stripe = accdb_index_enabled( accdb ) ? index_stripe( accdb, pubkeys[ i ] ) : NULL;
+    if( stripe ) {
+      for(;;) {
+        spin_lock_acquire( (int *)&stripe->lock );
+        if( FD_LIKELY( FD_VOLATILE_CONST( stripe->seq )==index_seqs[ i ] ) ) break;
+        spin_lock_release( (int *)&stripe->lock );
+        FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_retries, 1UL );
+
+        accmetas[ i ] = index_lookup_acquire( accdb, fork, fork_id, root_generation, pubkeys[ i ],
+                                              &acc_refs[ i ], &acc_map_idxs[ i ], &index_seqs[ i ] );
+        if( FD_UNLIKELY( accmetas[ i ] && !writable[ i ] && !accmetas[ i ]->lamports ) ) accmetas[ i ] = NULL;
+
+        /* A migration can change the tier after the write slot was
+           reserved in step 1.  Replace that reservation so a later
+           cross-fork commit remains in the bundle's authoritative tier. */
+        if( writable[ i ] && !fd_accdb_acc_ref_is_null( reserved_refs[ i ] ) &&
+            !fd_accdb_acc_ref_is_null( acc_refs[ i ] ) &&
+            fd_accdb_acc_ref_is_hot( reserved_refs[ i ] )!=fd_accdb_acc_ref_is_hot( acc_refs[ i ] ) ) {
+          acc_ref_release( accdb, reserved_refs[ i ] );
+          reserved_refs[ i ] = acc_ref_acquire( accdb, fd_accdb_acc_ref_is_hot( acc_refs[ i ] ), 1 );
+          while( FD_UNLIKELY( fd_accdb_acc_ref_is_null( reserved_refs[ i ] ) ) ) {
+            FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_admission_stalls, 1UL );
+            FD_SPIN_PAUSE();
+            reserved_refs[ i ] = acc_ref_acquire( accdb, fd_accdb_acc_ref_is_hot( acc_refs[ i ] ), 1 );
+          }
+        }
+      }
+    }
+
     original_cache_line[ i ] = NULL;
     if( FD_LIKELY( accmetas[ i ] ) ) {
       if( FD_LIKELY( FD_ACCDB_SIZE_CACHE_VALID( FD_VOLATILE_CONST( accmetas[ i ]->executable_size ) ) ) ) {
@@ -2436,15 +2861,18 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
     }
     exists_in_cache[ i ] = original_cache_line[ i ]!=NULL;
 
+    if( FD_UNLIKELY( accmetas[ i ] && !original_cache_line[ i ] ) ) {
+      original_cache_line[ i ] = cold_load_acc( accdb, accmetas[ i ], pubkeys[ i ], &exists_in_cache[ i ], &evicted_orig_acc[ i ] );
+    }
+
+    /* Once the selected version's cache line is pinned, migration will
+       defer on its non-zero refcount.  The pin remains held until
+       release, so the tagged reference cannot become stale while the
+       caller executes. */
+    if( stripe ) spin_lock_release( (int *)&stripe->lock );
+
     if( FD_UNLIKELY( writable[ i ] ) ) {
       for( ulong j=0UL; j<FD_ACCDB_CACHE_CLASS_CNT; j++ ) destination_cache_lines[ i ][ j ] = acquire_cache_line( accdb, j, &evicted_dest_acc[ i ][ j ] );
-      if( FD_UNLIKELY( accmetas[ i ] && !original_cache_line[ i ] ) ) {
-        original_cache_line[ i ] = cold_load_acc( accdb, accmetas[ i ], pubkeys[ i ], &exists_in_cache[ i ], &evicted_orig_acc[ i ] );
-      }
-    } else {
-      if( FD_UNLIKELY( !original_cache_line[ i ] ) ) {
-        original_cache_line[ i ] = cold_load_acc( accdb, accmetas[ i ], pubkeys[ i ], &exists_in_cache[ i ], &evicted_orig_acc[ i ] );
-      }
     }
   }
 
@@ -2480,7 +2908,7 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
         accdb->metrics->accounts_evicted++;
         accdb->metrics->accounts_evicted_per_class[ j ]++;
 
-        fd_accdb_accmeta_t const * evicted = &accdb->acc_pool[ evicted_dest_acc[ i ][ j ] ];
+        fd_accdb_accmeta_t const * evicted = acc_ref_meta_const( accdb, evicted_dest_acc[ i ][ j ] );
         fd_racesan_hook( "writeback:pre_synth" );
         total_write_sz += sizeof(fd_accdb_disk_meta_t) + FD_ACCDB_SIZE_DATA( evicted->executable_size );
         FD_TEST( write_meta_cnt<(int)(sizeof(write_metas)/sizeof(write_metas[0])) );
@@ -2493,7 +2921,7 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
         write_ops[ write_ops_cnt++ ] = (struct iovec){ .iov_base = destination_cache_lines[ i ][ j ]+1UL, .iov_len = FD_ACCDB_SIZE_DATA( evicted->executable_size ) };
       }
       if( FD_UNLIKELY( accmetas[ i ] && !exists_in_cache[ i ] && evicted_orig_acc[ i ]!=UINT_MAX ) ) {
-        fd_accdb_accmeta_t const * evicted = &accdb->acc_pool[ evicted_orig_acc[ i ] ];
+        fd_accdb_accmeta_t const * evicted = acc_ref_meta_const( accdb, evicted_orig_acc[ i ] );
         accdb->metrics->accounts_evicted++;
         accdb->metrics->accounts_evicted_per_class[ fd_accdb_cache_class( FD_ACCDB_SIZE_DATA( evicted->executable_size ) ) ]++;
 
@@ -2509,7 +2937,7 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
       }
     } else {
       if( FD_LIKELY( exists_in_cache[ i ] || evicted_orig_acc[ i ]==UINT_MAX ) ) continue;
-      fd_accdb_accmeta_t const * evicted = &accdb->acc_pool[ evicted_orig_acc[ i ] ];
+      fd_accdb_accmeta_t const * evicted = acc_ref_meta_const( accdb, evicted_orig_acc[ i ] );
       accdb->metrics->accounts_evicted++;
       accdb->metrics->accounts_evicted_per_class[ fd_accdb_cache_class( FD_ACCDB_SIZE_DATA( evicted->executable_size ) ) ]++;
       total_write_sz += sizeof(fd_accdb_disk_meta_t) + FD_ACCDB_SIZE_DATA( evicted->executable_size );
@@ -2561,7 +2989,7 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
       for( ulong j=0UL; j<FD_ACCDB_CACHE_CLASS_CNT; j++ ) {
         if( FD_LIKELY( evicted_dest_acc[ i ][ j ]==UINT_MAX ) ) continue;
 
-        fd_accdb_accmeta_t * evicted = &accdb->acc_pool[ evicted_dest_acc[ i ][ j ] ];
+        fd_accdb_accmeta_t * evicted = acc_ref_meta( accdb, evicted_dest_acc[ i ][ j ] );
         ulong entry_sz = sizeof(fd_accdb_disk_meta_t) + (ulong)FD_ACCDB_SIZE_DATA( evicted->executable_size );
         /* xchg-to-INVAL atomically captures the old offset and prevents
            a concurrent acc_unlink from also reading and freeing it (the
@@ -2583,7 +3011,7 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
         FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->disk_used_bytes, entry_sz );
       }
       if( FD_UNLIKELY( accmetas[ i ] && !exists_in_cache[ i ] && evicted_orig_acc[ i ]!=UINT_MAX ) ) {
-        fd_accdb_accmeta_t * evicted = &accdb->acc_pool[ evicted_orig_acc[ i ] ];
+        fd_accdb_accmeta_t * evicted = acc_ref_meta( accdb, evicted_orig_acc[ i ] );
         ulong entry_sz = sizeof(fd_accdb_disk_meta_t) + (ulong)FD_ACCDB_SIZE_DATA( evicted->executable_size );
         ulong old_off = fd_accdb_acc_xchg_offset( evicted, FD_ACCDB_OFF_INVAL );
         if( FD_LIKELY( old_off!=FD_ACCDB_OFF_INVAL ) ) {
@@ -2602,7 +3030,7 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
     } else {
       if( FD_LIKELY( exists_in_cache[ i ] || evicted_orig_acc[ i ]==UINT_MAX ) ) continue;
 
-      fd_accdb_accmeta_t * evicted = &accdb->acc_pool[ evicted_orig_acc[ i ] ];
+      fd_accdb_accmeta_t * evicted = acc_ref_meta( accdb, evicted_orig_acc[ i ] );
       ulong entry_sz = sizeof(fd_accdb_disk_meta_t) + (ulong)FD_ACCDB_SIZE_DATA( evicted->executable_size );
       ulong old_off = fd_accdb_acc_xchg_offset( evicted, FD_ACCDB_OFF_INVAL );
       if( FD_LIKELY( old_off!=FD_ACCDB_OFF_INVAL ) ) {
@@ -2643,6 +3071,8 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
       out_accs[ i ]._writable = 0;
       out_accs[ i ]._original_size_class = ULONG_MAX;
       out_accs[ i ]._original_cache_idx = ULONG_MAX;
+      out_accs[ i ]._acc_ref = FD_ACCDB_ACC_REF_NULL;
+      out_accs[ i ]._reserved_acc_ref = FD_ACCDB_ACC_REF_NULL;
       continue;
     }
 
@@ -2691,6 +3121,8 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
       out_accs[ i ]._generation = fork->shmem->generation;
       out_accs[ i ]._acc_map_idx = acc_map_idxs[ i ];
     }
+    out_accs[ i ]._acc_ref = acc_refs[ i ];
+    out_accs[ i ]._reserved_acc_ref = reserved_refs[ i ];
     fd_memcpy( out_accs[ i ].pubkey, pubkeys[ i ], 32UL );
 
     if( FD_UNLIKELY( !accmetas[ i ] ) ) {
@@ -2883,8 +3315,8 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
   FD_COMPILER_MFENCE();
   for( ulong i=0UL; i<pubkeys_cnt; i++ ) {
     if( FD_UNLIKELY( !accmetas[ i ] || exists_in_cache[ i ] ) ) continue;
-    FD_VOLATILE( original_cache_line[ i ]->acc_idx ) = (uint)( accmetas[ i ] - accdb->acc_pool );
-    FD_TEST( FD_VOLATILE_CONST( original_cache_line[ i ]->acc_idx )==(uint)( accmetas[ i ] - accdb->acc_pool ) );
+    FD_VOLATILE( original_cache_line[ i ]->acc_idx ) = acc_refs[ i ];
+    FD_TEST( FD_VOLATILE_CONST( original_cache_line[ i ]->acc_idx )==acc_refs[ i ] );
   }
 
   // STEP 14.
@@ -3120,11 +3552,12 @@ release_inner( fd_accdb_t * accdb,
         }
         cache_free_push( accdb, j, destination_cache_lines[ j ] );
       }
+      if( !fd_accdb_acc_ref_is_null( accs[ i ]._reserved_acc_ref ) ) acc_ref_release( accdb, accs[ i ]._reserved_acc_ref );
       continue;
     }
 
     ulong new_size_class = fd_accdb_cache_class( accs[ i ].data_len );
-    uint original_acc_idx = original_cache_line ? original_cache_line->acc_idx : UINT_MAX;
+    fd_accdb_acc_ref_t original_acc_idx = original_cache_line ? original_cache_line->acc_idx : FD_ACCDB_ACC_REF_NULL;
     fd_accdb_cache_line_t * committed_line;
 
     /* For overwrites, invalidate the on-disk offset BEFORE removing
@@ -3135,7 +3568,7 @@ release_inner( fd_accdb_t * accdb,
        compaction CAS (old_offset -> dest_offset). */
     ulong old_offset = FD_ACCDB_OFF_INVAL;
     if( FD_LIKELY( accs[ i ]._overwrite ) ) {
-      fd_accdb_accmeta_t * ow_accmeta = &accdb->acc_pool[ original_acc_idx ];
+      fd_accdb_accmeta_t * ow_accmeta = acc_ref_meta( accdb, original_acc_idx );
       fd_racesan_hook( "accdb_overwrite:pre_xchg_offset" );
       old_offset = fd_accdb_acc_xchg_offset( ow_accmeta, FD_ACCDB_OFF_INVAL );
       if( FD_LIKELY( old_offset!=FD_ACCDB_OFF_INVAL ) ) {
@@ -3158,7 +3591,7 @@ release_inner( fd_accdb_t * accdb,
            acc.cache_idx pointing at a line that has been recycled to
            another acc.  evict_clear_acc_cache_ref uses the CLAIM
            protocol to serialize with cold_load_acc. */
-        evict_clear_acc_cache_ref( &accdb->acc_pool[ original_acc_idx ], original_size_class, accs[ i ]._original_cache_idx );
+        evict_clear_acc_cache_ref( acc_ref_meta( accdb, original_acc_idx ), original_size_class, accs[ i ]._original_cache_idx );
 
         /* Convert our own pin directly into the eviction claim
            (CAS refcnt 1 -> EVICT_SENTINEL) so refcnt never passes
@@ -3227,7 +3660,7 @@ release_inner( fd_accdb_t * accdb,
              protocol to serialize with cold_load_acc.  See the
              size_class==7 path above for the refcnt claim and
              persisted rationale. */
-          evict_clear_acc_cache_ref( &accdb->acc_pool[ original_acc_idx ], original_size_class, accs[ i ]._original_cache_idx );
+          evict_clear_acc_cache_ref( acc_ref_meta( accdb, original_acc_idx ), original_size_class, accs[ i ]._original_cache_idx );
           original_cache_line->persisted = 1;
           fd_racesan_hook( "accdb_release:pre_discard_claim" );
           if( FD_LIKELY( FD_ATOMIC_CAS( &original_cache_line->refcnt, 1U, FD_ACCDB_EVICT_SENTINEL )==1U ) ) {
@@ -3292,7 +3725,7 @@ release_inner( fd_accdb_t * accdb,
       accdb->metrics->accounts_committed_overwrite_per_class[ new_size_class ]++;
       committed_line->acc_idx = original_acc_idx;
 
-      fd_accdb_accmeta_t * accmeta = &accdb->acc_pool[ original_acc_idx ];
+      fd_accdb_accmeta_t * accmeta = acc_ref_meta( accdb, original_acc_idx );
       /* The offset was already atomically swapped to FD_ACCDB_OFF_INVAL
          and bytes freed above, so just update the metadata and
          re-publish the cache location.  CAS-loop preserves CLAIM bit
@@ -3330,9 +3763,11 @@ release_inner( fd_accdb_t * accdb,
       committed_line->referenced = 1;
     } else {
       accdb->metrics->accounts_committed_new_per_class[ new_size_class ]++;
-      fd_accdb_accmeta_t * accmeta = acc_pool_acquire( accdb->acc_pool_join );
-      FD_TEST( accmeta );
-      ulong acc_idx = acc_pool_idx( accdb->acc_pool_join, accmeta );
+      fd_accdb_acc_ref_t acc_ref = accs[ i ]._reserved_acc_ref;
+      FD_TEST( !fd_accdb_acc_ref_is_null( acc_ref ) );
+      uint acc_idx = fd_accdb_acc_ref_idx( acc_ref );
+      int hot = fd_accdb_acc_ref_is_hot( acc_ref );
+      fd_accdb_accmeta_t * accmeta = acc_ref_meta( accdb, acc_ref );
       fd_memcpy( accmeta->key.pubkey, accs[ i ].pubkey, 32UL );
       accmeta->lamports        = accs[ i ].lamports;
       accmeta->executable_size = FD_ACCDB_SIZE_PACK( (uint)accs[ i ].data_len, accs[ i ].executable )
@@ -3344,7 +3779,7 @@ release_inner( fd_accdb_t * accdb,
          concurrent acquire that finds this acc in the hash chain will
          also find a cache hit, rather than inserting a conflicting
          placeholder cache acc. */
-      committed_line->acc_idx = (uint)acc_idx;
+      committed_line->acc_idx = acc_ref;
       fd_memcpy( committed_line->owner, accs[ i ].owner, 32UL );
       fd_memcpy( committed_line->key.pubkey, accmeta->key.pubkey, 32UL );
       committed_line->key.generation = accmeta->key.generation;
@@ -3364,12 +3799,15 @@ release_inner( fd_accdb_t * accdb,
          the old head can change acc_map[idx] between our load and
          CAS.  Multiple concurrent releases may also race on the head
          pointer — the CAS retry handles this. */
+      fd_accdb_index_stripe_t * stripe = accdb_index_enabled( accdb ) ? index_stripe( accdb, accs[ i ].pubkey ) : NULL;
+      if( stripe ) index_stripe_lock( stripe );
       for(;;) {
-        uint old_head = FD_VOLATILE_CONST( accdb->acc_map[ accs[ i ]._acc_map_idx ] );
+        uint * map = hot ? accdb->hot_map : accdb->acc_map;
+        uint old_head = FD_VOLATILE_CONST( map[ accs[ i ]._acc_map_idx ] );
         accmeta->map.next = old_head;
         FD_COMPILER_MFENCE();
         fd_racesan_hook( "accdb_release:pre_chain_cas" );
-        if( FD_LIKELY( FD_ATOMIC_CAS( &accdb->acc_map[ accs[ i ]._acc_map_idx ], old_head, (uint)acc_idx )==old_head ) ) break;
+        if( FD_LIKELY( FD_ATOMIC_CAS( &map[ accs[ i ]._acc_map_idx ], old_head, acc_idx )==old_head ) ) break;
         FD_SPIN_PAUSE();
       }
 
@@ -3398,14 +3836,17 @@ release_inner( fd_accdb_t * accdb,
 
       fd_accdb_txn_t * txn = txn_pool_acquire( accdb->txn_pool );
       FD_TEST( txn ); /* Sized so it always succeeds */
-      txn->acc_pool_idx = (uint)acc_idx;
+      txn->acc_pool_idx = acc_ref;
       uint txn_idx = (uint)txn_pool_idx( accdb->txn_pool, txn );
+      if( accdb_index_enabled( accdb ) ) *acc_ref_txn_slot( accdb, acc_ref ) = txn_idx+1U;
       for(;;) {
         uint old_head = FD_VOLATILE_CONST( accdb->fork_pool[ accs[ i ]._fork_id ].shmem->txn_head );
         txn->fork.next = old_head;
         if( FD_LIKELY( FD_ATOMIC_CAS( &accdb->fork_pool[ accs[ i ]._fork_id ].shmem->txn_head, old_head, txn_idx )==old_head ) ) break;
         FD_SPIN_PAUSE();
       }
+
+      if( stripe ) index_stripe_unlock( stripe );
 
       FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->accounts_total, 1UL );
     }
@@ -3491,6 +3932,67 @@ fd_accdb_unwrite_one( fd_accdb_t * accdb,
   fd_accdb_release( accdb, 1UL, acc );
 }
 
+static fd_accdb_accmeta_t const *
+acc_lookup_visible( fd_accdb_t *        accdb,
+                    fd_accdb_fork_id_t  fork_id,
+                    uchar const *       pubkey,
+                    fd_accdb_acc_ref_t * out_ref ) {
+  uint root_generation = accdb->fork_pool[ accdb->shmem->root_fork_id.val ].shmem->generation;
+  fd_accdb_fork_t * fork = &accdb->fork_pool[ fork_id.val ];
+  fd_accdb_index_stripe_t * stripe = accdb_index_enabled( accdb ) ? index_stripe( accdb, pubkey ) : NULL;
+  for(;;) {
+    uint seq = stripe ? FD_VOLATILE_CONST( stripe->seq ) : 0U;
+    if( FD_UNLIKELY( seq&1U ) ) { FD_SPIN_PAUSE(); continue; }
+    int hot_bundle = 0;
+    fd_accdb_accmeta_t const * result = NULL;
+    fd_accdb_acc_ref_t ref = FD_ACCDB_ACC_REF_NULL;
+
+    if( stripe ) {
+      ulong hash = fd_hash32( pubkey, accdb->shmem->seed )&(accdb->shmem->hot_chain_cnt-1UL);
+      for( uint idx=FD_VOLATILE_CONST( accdb->hot_map[ hash ] ); idx!=UINT_MAX; idx=FD_VOLATILE_CONST( accdb->acc_pool[ idx ].map.next ) ) {
+        fd_accdb_accmeta_t const * m = &accdb->acc_pool[ idx ];
+        if( memcmp( pubkey, m->key.pubkey, 32UL ) ) continue;
+        hot_bundle = 1;
+        if( m->key.generation<=root_generation || fd_accdb_acc_fork_id(m)==fork_id.val || descends_set_test( fork->descends, fd_accdb_acc_fork_id(m) ) ) {
+          result = m;
+          ref = fd_accdb_acc_ref( idx, 1 );
+          break;
+        }
+      }
+    }
+
+    if( !result && !hot_bundle ) {
+      ulong hash = fd_hash32( pubkey, accdb->shmem->seed )&(accdb->shmem->chain_cnt-1UL);
+      fd_accdb_accmeta_t * pool = stripe ? accdb->cold_pool : accdb->acc_pool;
+      for( uint idx=FD_VOLATILE_CONST( accdb->acc_map[ hash ] ); idx!=UINT_MAX; idx=FD_VOLATILE_CONST( pool[ idx ].map.next ) ) {
+        fd_accdb_accmeta_t const * m = &pool[ idx ];
+        if( (m->key.generation<=root_generation || fd_accdb_acc_fork_id(m)==fork_id.val || descends_set_test( fork->descends, fd_accdb_acc_fork_id(m) )) &&
+            !memcmp( pubkey, m->key.pubkey, 32UL ) ) {
+          result = m;
+          ref = fd_accdb_acc_ref( idx, 0 );
+          break;
+        }
+      }
+    }
+
+    FD_COMPILER_MFENCE();
+    if( FD_UNLIKELY( stripe && FD_VOLATILE_CONST( stripe->seq )!=seq ) ) {
+      FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_retries, 1UL );
+      continue;
+    }
+    *out_ref = ref;
+    if( result && stripe && !accdb->readonly ) {
+      if( fd_accdb_acc_ref_is_hot( ref ) ) {
+        FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_hot_hits, 1UL );
+        accdb->hot_heat[ fd_accdb_acc_ref_idx( ref ) ] = 1U;
+      } else {
+        FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_cold_hits, 1UL );
+      }
+    }
+    return result;
+  }
+}
+
 int
 fd_accdb_read_one_nocache( fd_accdb_t *       accdb,
                            fd_accdb_fork_id_t fork_id,
@@ -3513,24 +4015,8 @@ fd_accdb_read_one_nocache( fd_accdb_t *       accdb,
   ///   Walk the hash chain at acc_map[hash(pubkey)] using the same
   //    visibility test as fd_accdb_acquire_inner.  See that function
   //    for the detailed safety argument under concurrent prepend.
-  uint root_generation = accdb->fork_pool[ accdb->shmem->root_fork_id.val ].shmem->generation;
-  fd_accdb_fork_t * fork = &accdb->fork_pool[ fork_id.val ];
-  ulong hash = fd_hash32( pubkey, accdb->shmem->seed )&(accdb->shmem->chain_cnt-1UL);
-  uint acc_idx = FD_VOLATILE_CONST( accdb->acc_map[ hash ] );
-  fd_accdb_accmeta_t const * accmeta = NULL;
-  while( acc_idx!=UINT_MAX ) {
-    fd_accdb_accmeta_t const * candidate = &accdb->acc_pool[ acc_idx ];
-    uint next_idx = FD_VOLATILE_CONST( candidate->map.next );
-    if( FD_UNLIKELY( (candidate->key.generation>root_generation &&
-                      fd_accdb_acc_fork_id(candidate)!=fork_id.val &&
-                      !descends_set_test( fork->descends, fd_accdb_acc_fork_id(candidate) )) ) ||
-                     memcmp( pubkey, candidate->key.pubkey, 32UL ) ) {
-      acc_idx = next_idx;
-      continue;
-    }
-    accmeta = candidate;
-    break;
-  }
+  fd_accdb_acc_ref_t acc_ref;
+  fd_accdb_accmeta_t const * accmeta = acc_lookup_visible( accdb, fork_id, pubkey, &acc_ref );
 
   if( FD_UNLIKELY( !accmeta ) ) {
     accdb->metrics->accounts_acquired_per_class[ 0 ]++;
@@ -3676,25 +4162,9 @@ fd_accdb_exists( fd_accdb_t *       accdb,
   FD_VOLATILE( *accdb->my_epoch_slot ) = FD_VOLATILE_CONST( accdb->shmem->epoch );
   FD_HW_MFENCE();
 
-  uint root_generation = accdb->fork_pool[ accdb->shmem->root_fork_id.val ].shmem->generation;
-  fd_accdb_fork_t * fork = &accdb->fork_pool[ fork_id.val ];
-  ulong hash = fd_hash32( pubkey, accdb->shmem->seed )&(accdb->shmem->chain_cnt-1UL);
-  uint acc = FD_VOLATILE_CONST( accdb->acc_map[ hash ] );
-  while( acc!=UINT_MAX ) {
-    fd_accdb_accmeta_t const * candidate_acc = &accdb->acc_pool[ acc ];
-    uint next_acc = FD_VOLATILE_CONST( candidate_acc->map.next );
-
-    if( FD_UNLIKELY( (candidate_acc->key.generation>root_generation && fd_accdb_acc_fork_id(candidate_acc)!=fork_id.val && !descends_set_test( fork->descends, fd_accdb_acc_fork_id(candidate_acc) )) ) || memcmp( pubkey, candidate_acc->key.pubkey, 32UL ) ) {
-      acc = next_acc;
-      continue;
-    }
-
-    break;
-  }
-
-  int result;
-  if( FD_UNLIKELY( acc==UINT_MAX ) ) result = 0;
-  else                               result = !!FD_VOLATILE_CONST( accdb->acc_pool[ acc ].lamports );
+  fd_accdb_acc_ref_t ref;
+  fd_accdb_accmeta_t const * m = acc_lookup_visible( accdb, fork_id, pubkey, &ref );
+  int result = m ? !!FD_VOLATILE_CONST( m->lamports ) : 0;
 
   FD_COMPILER_MFENCE();
   FD_VOLATILE( *accdb->my_epoch_slot ) = ULONG_MAX;
@@ -3712,28 +4182,16 @@ fd_accdb_probe_pd_this_fork( fd_accdb_t *       accdb,
   FD_VOLATILE( *accdb->my_epoch_slot ) = FD_VOLATILE_CONST( accdb->shmem->epoch );
   FD_HW_MFENCE();
 
-  uint root_generation = accdb->fork_pool[ accdb->shmem->root_fork_id.val ].shmem->generation;
   fd_accdb_fork_t * fork = &accdb->fork_pool[ fork_id.val ];
-  ulong hash = fd_hash32( pubkey, accdb->shmem->seed )&(accdb->shmem->chain_cnt-1UL);
-  uint acc = FD_VOLATILE_CONST( accdb->acc_map[ hash ] );
-  while( acc!=UINT_MAX ) {
-    fd_accdb_accmeta_t const * candidate_acc = &accdb->acc_pool[ acc ];
-    uint next_acc = FD_VOLATILE_CONST( candidate_acc->map.next );
-
-    if( FD_UNLIKELY( (candidate_acc->key.generation>root_generation && fd_accdb_acc_fork_id(candidate_acc)!=fork_id.val && !descends_set_test( fork->descends, fd_accdb_acc_fork_id(candidate_acc) )) ) || memcmp( pubkey, candidate_acc->key.pubkey, 32UL ) ) {
-      acc = next_acc;
-      continue;
-    }
-
-    break;
-  }
+  fd_accdb_acc_ref_t ref;
+  fd_accdb_accmeta_t const * found = acc_lookup_visible( accdb, fork_id, pubkey, &ref );
 
   int   pd        = 0;
   int   gen_match = 0;
   ulong len       = 0UL;
   ulong lamports  = 0UL;
-  if( FD_LIKELY( acc!=UINT_MAX ) ) {
-    fd_accdb_accmeta_t const * m = &accdb->acc_pool[ acc ];
+  if( FD_LIKELY( found ) ) {
+    fd_accdb_accmeta_t const * m = found;
     uint es   = FD_VOLATILE_CONST( m->executable_size );
     gen_match = ( m->key.generation==fork->shmem->generation );
     pd        = gen_match && FD_ACCDB_SIZE_PD_WRITE( es );
@@ -3760,25 +4218,9 @@ fd_accdb_lamports( fd_accdb_t *       accdb,
   FD_VOLATILE( *accdb->my_epoch_slot ) = FD_VOLATILE_CONST( accdb->shmem->epoch );
   FD_HW_MFENCE();
 
-  uint root_generation = accdb->fork_pool[ accdb->shmem->root_fork_id.val ].shmem->generation;
-  fd_accdb_fork_t * fork = &accdb->fork_pool[ fork_id.val ];
-  ulong hash = fd_hash32( pubkey, accdb->shmem->seed )&(accdb->shmem->chain_cnt-1UL);
-  uint acc = FD_VOLATILE_CONST( accdb->acc_map[ hash ] );
-  while( acc!=UINT_MAX ) {
-    fd_accdb_accmeta_t const * candidate_acc = &accdb->acc_pool[ acc ];
-    uint next_acc = FD_VOLATILE_CONST( candidate_acc->map.next );
-
-    if( FD_UNLIKELY( (candidate_acc->key.generation>root_generation && fd_accdb_acc_fork_id(candidate_acc)!=fork_id.val && !descends_set_test( fork->descends, fd_accdb_acc_fork_id(candidate_acc) )) ) || memcmp( pubkey, candidate_acc->key.pubkey, 32UL ) ) {
-      acc = next_acc;
-      continue;
-    }
-
-    break;
-  }
-
-  ulong result;
-  if( FD_UNLIKELY( acc==UINT_MAX ) ) result = 0UL;
-  else                               result = FD_VOLATILE_CONST( accdb->acc_pool[ acc ].lamports );
+  fd_accdb_acc_ref_t ref;
+  fd_accdb_accmeta_t const * m = acc_lookup_visible( accdb, fork_id, pubkey, &ref );
+  ulong result = m ? FD_VOLATILE_CONST( m->lamports ) : 0UL;
 
   FD_COMPILER_MFENCE();
   FD_VOLATILE( *accdb->my_epoch_slot ) = ULONG_MAX;
@@ -3862,11 +4304,11 @@ background_preevict( fd_accdb_t * accdb,
       uint line_gen FD_FN_UNUSED = line->key.generation;
 #endif
       if( FD_LIKELY( acc_idx!=UINT_MAX ) ) {
-        evict_clear_acc_cache_ref( &accdb->acc_pool[ acc_idx ], c, hand );
+        evict_clear_acc_cache_ref( acc_ref_meta( accdb, acc_idx ), c, hand );
       }
       line->key.generation = UINT_MAX;
       if( FD_UNLIKELY( !line->persisted && acc_idx!=UINT_MAX ) ) {
-        fd_accdb_accmeta_t * accmeta = &accdb->acc_pool[ acc_idx ];
+        fd_accdb_accmeta_t * accmeta = acc_ref_meta( accdb, acc_idx );
 
         /* advertise to external observers that write is in progress */
         FD_COMPILER_MFENCE();
@@ -3975,11 +4417,13 @@ fd_accdb_snapshot_write_one( fd_accdb_t *       accdb,
   *out_replaced_lamports = 0UL;
 
   fd_accdb_accmeta_t * accmeta = NULL;
+  fd_accdb_acc_ref_t acc_ref = FD_ACCDB_ACC_REF_NULL;
   int cross_fork = 0; /* incremental only: existing entry from different fork */
 
+  fd_accdb_accmeta_t * snapshot_pool = accdb_index_enabled( accdb ) ? accdb->cold_pool : accdb->acc_pool;
   ulong next_acc = accdb->acc_map[ hash ];
   while( next_acc!=UINT_MAX ) {
-    fd_accdb_accmeta_t * candidate_acc = &accdb->acc_pool[ next_acc ];
+    fd_accdb_accmeta_t * candidate_acc = &snapshot_pool[ next_acc ];
     if( FD_UNLIKELY( !memcmp( pubkey, candidate_acc->key.pubkey, 32UL ) ) ) {
       if( FD_LIKELY( (ulong)candidate_acc->cache_idx>slot ) ) {
         /* Still advance the write head so snapwr and snapin stay in
@@ -3999,6 +4443,7 @@ fd_accdb_snapshot_write_one( fd_accdb_t *       accdb,
       } else {
         /* Same-fork duplicate (or full-snapshot mode): replace in-place */
         accmeta = candidate_acc;
+        acc_ref = fd_accdb_acc_ref( (uint)next_acc, 0 );
       }
       break;
     }
@@ -4008,10 +4453,14 @@ fd_accdb_snapshot_write_one( fd_accdb_t *       accdb,
   int replace = !!accmeta;
 
   if( FD_UNLIKELY( !accmeta ) ) {
-    accmeta = acc_pool_acquire_nolock( accdb->acc_pool_join );
-    if( FD_UNLIKELY( !accmeta ) ) FD_LOG_ERR(( "accounts database ran out of space during snapshot loading, increase [accounts.max_accounts], current value is %lu", acc_pool_ele_max( accdb->acc_pool_join ) ));
-
-    uint acc_idx = (uint)acc_pool_idx( accdb->acc_pool_join, accmeta );
+    if( accdb_index_enabled( accdb ) ) acc_ref = cold_pool_acquire( accdb );
+    else {
+      accmeta = acc_pool_acquire_nolock( accdb->acc_pool_join );
+      if( accmeta ) acc_ref = fd_accdb_acc_ref( (uint)acc_pool_idx( accdb->acc_pool_join, accmeta ), 0 );
+    }
+    if( FD_UNLIKELY( fd_accdb_acc_ref_is_null( acc_ref ) ) ) FD_LOG_ERR(( "accounts database ran out of space during snapshot loading, increase [accounts.max_accounts], current value is %lu", accdb->shmem->max_accounts ));
+    uint acc_idx = fd_accdb_acc_ref_idx( acc_ref );
+    accmeta = acc_ref_meta( accdb, acc_ref );
 
     fd_memcpy( accmeta->key.pubkey, pubkey, 32UL );
     if( FD_UNLIKELY( !incremental && accdb->shmem->root_fork_id.val==USHORT_MAX ) ) {
@@ -4026,8 +4475,9 @@ fd_accdb_snapshot_write_one( fd_accdb_t *       accdb,
     if( FD_UNLIKELY( incremental ) ) {
       fd_accdb_txn_t * txn = txn_pool_acquire( accdb->txn_pool );
       if( FD_UNLIKELY( !txn ) ) FD_LOG_ERR(( "txn pool exhausted during incremental snapshot loading" ));
-      txn->acc_pool_idx = acc_idx;
+      txn->acc_pool_idx = acc_ref;
       uint txn_idx      = (uint)txn_pool_idx( accdb->txn_pool, txn );
+      if( accdb_index_enabled( accdb ) ) *acc_ref_txn_slot( accdb, acc_ref ) = txn_idx+1U;
       txn->fork.next          = fork->shmem->txn_head;
       fork->shmem->txn_head   = txn_idx;
     }
@@ -4121,17 +4571,18 @@ fd_accdb_snapshot_write_batch( fd_accdb_t *        accdb,
      they can be left in place while a new entry is inserted. */
 
   for( ulong i=0UL; i<cnt; i++ ) {
+    fd_accdb_accmeta_t * snapshot_pool = accdb_index_enabled( accdb ) ? accdb->cold_pool : accdb->acc_pool;
     ulong next_acc = accdb->acc_map[ hashes[ i ] ];
 
     if( FD_LIKELY( next_acc!=UINT_MAX ) ) {
-      __builtin_prefetch( &accdb->acc_pool[ next_acc ], 0, 1 );
+      __builtin_prefetch( &snapshot_pool[ next_acc ], 0, 1 );
     }
 
     while( next_acc!=UINT_MAX ) {
-      fd_accdb_accmeta_t * candidate = &accdb->acc_pool[ next_acc ];
+      fd_accdb_accmeta_t * candidate = &snapshot_pool[ next_acc ];
 
       if( FD_LIKELY( candidate->map.next!=UINT_MAX ) ) {
-        __builtin_prefetch( &accdb->acc_pool[ candidate->map.next ], 0, 1 );
+        __builtin_prefetch( &snapshot_pool[ candidate->map.next ], 0, 1 );
       }
 
       if( FD_UNLIKELY( !memcmp( pubkeys[ i ], candidate->key.pubkey, 32UL ) ) ) {
@@ -4199,10 +4650,15 @@ fd_accdb_snapshot_write_batch( fd_accdb_t *        accdb,
       replaced_lamports += accmeta->lamports;
       replaced++;
     } else {
-      accmeta = acc_pool_acquire_nolock( accdb->acc_pool_join );
-      if( FD_UNLIKELY( !accmeta ) ) FD_LOG_ERR(( "accounts database ran out of space during snapshot loading" ));
-
-      uint acc_idx = (uint)acc_pool_idx( accdb->acc_pool_join, accmeta );
+      fd_accdb_acc_ref_t acc_ref;
+      if( accdb_index_enabled( accdb ) ) acc_ref = cold_pool_acquire( accdb );
+      else {
+        accmeta = acc_pool_acquire_nolock( accdb->acc_pool_join );
+        acc_ref = accmeta ? fd_accdb_acc_ref( (uint)acc_pool_idx( accdb->acc_pool_join, accmeta ), 0 ) : FD_ACCDB_ACC_REF_NULL;
+      }
+      if( FD_UNLIKELY( fd_accdb_acc_ref_is_null( acc_ref ) ) ) FD_LOG_ERR(( "accounts database ran out of space during snapshot loading" ));
+      uint acc_idx = fd_accdb_acc_ref_idx( acc_ref );
+      accmeta = acc_ref_meta( accdb, acc_ref );
 
       fd_memcpy( accmeta->key.pubkey, pubkeys[ i ], 32UL );
       accmeta->key.generation = incremental ? fork_gen : gen;
@@ -4212,8 +4668,9 @@ fd_accdb_snapshot_write_batch( fd_accdb_t *        accdb,
       if( FD_UNLIKELY( incremental ) ) {
         fd_accdb_txn_t * txn = txn_pool_acquire( accdb->txn_pool );
         if( FD_UNLIKELY( !txn ) ) FD_LOG_ERR(( "txn pool exhausted during incremental snapshot loading" ));
-        txn->acc_pool_idx = acc_idx;
+        txn->acc_pool_idx = acc_ref;
         uint txn_idx      = (uint)txn_pool_idx( accdb->txn_pool, txn );
+        if( accdb_index_enabled( accdb ) ) *acc_ref_txn_slot( accdb, acc_ref ) = txn_idx+1U;
         txn->fork.next          = fork->shmem->txn_head;
         fork->shmem->txn_head   = txn_idx;
       }
@@ -4267,6 +4724,231 @@ delta_reset( fd_accdb_t * accdb ) {
 static int
 delta_is_valid( fd_accdb_shmem_t const * accdb ) {
   return accdb->delta.head < accdb->delta.ele_max;
+}
+
+static int
+migration_retire_drain( fd_accdb_t * accdb ) {
+  uint cnt = accdb->shmem->migration_retire_cnt;
+  if( !cnt ) return 1;
+
+  ulong min_epoch = ULONG_MAX;
+  ulong joiner_cnt = FD_VOLATILE_CONST( accdb->shmem->joiner_cnt );
+  for( ulong t=0UL; t<joiner_cnt; t++ ) {
+    ulong e = FD_VOLATILE_CONST( accdb->shmem->joiner_epochs[ t ].val );
+    if( e<min_epoch ) min_epoch = e;
+  }
+  for( ulong t=0UL; t<accdb->external_epoch_cnt; t++ ) {
+    ulong e = FD_VOLATILE_CONST( *accdb->external_epoch_slots[ t ] );
+    if( e<min_epoch ) min_epoch = e;
+  }
+  if( FD_UNLIKELY( accdb->shmem->migration_retire_epoch>=min_epoch ) ) return 0;
+
+  for( uint i=0U; i<cnt; i++ ) {
+    fd_accdb_acc_ref_t ref = accdb->shmem->migration_retire[ i ];
+    *acc_ref_txn_slot( accdb, ref ) = 0U;
+    acc_ref_release( accdb, ref );
+  }
+  accdb->shmem->migration_retire_cnt = 0U;
+  return 1;
+}
+
+static ulong
+index_collect_bundle( fd_accdb_t *       accdb,
+                      int                hot,
+                      uchar const        pubkey[ 32 ],
+                      fd_accdb_acc_ref_t * refs,
+                      ulong              refs_max ) {
+  fd_accdb_accmeta_t * pool = hot ? accdb->acc_pool : accdb->cold_pool;
+  uint * map = hot ? accdb->hot_map : accdb->acc_map;
+  ulong chain_cnt = acc_ref_chain_cnt( accdb, hot );
+  uint cur = FD_VOLATILE_CONST( map[ fd_hash32( pubkey, accdb->shmem->seed )&(chain_cnt-1UL) ] );
+  ulong cnt = 0UL;
+  while( cur!=UINT_MAX ) {
+    fd_accdb_accmeta_t * m = &pool[ cur ];
+    if( !memcmp( m->key.pubkey, pubkey, 32UL ) ) {
+      if( FD_UNLIKELY( cnt>=refs_max ) ) return ULONG_MAX;
+      refs[ cnt++ ] = fd_accdb_acc_ref( cur, hot );
+    }
+    cur = FD_VOLATILE_CONST( m->map.next );
+  }
+  return cnt;
+}
+
+static int
+index_migrate_bundle( fd_accdb_t * accdb,
+                      uchar const  pubkey[ 32 ],
+  int          promote ) {
+  if( FD_UNLIKELY( !accdb_index_enabled( accdb ) || FD_VOLATILE_CONST( accdb->shmem->snapshot_loading ) ) ) return 0;
+  if( FD_UNLIKELY( !migration_retire_drain( accdb ) ) ) return 0;
+
+  int src_hot = !promote;
+  int dst_hot =  promote;
+  ulong max_versions = accdb->shmem->max_live_slots;
+  fd_accdb_acc_ref_t src[ max_versions ];
+  fd_accdb_acc_ref_t dst[ max_versions ];
+  fd_accdb_cache_line_t * claimed[ max_versions ];
+  ulong cnt = index_collect_bundle( accdb, src_hot, pubkey, src, max_versions );
+  if( FD_UNLIKELY( !cnt || cnt==ULONG_MAX ) ) return 0;
+  if( FD_UNLIKELY( cnt>FD_ACCDB_MIGRATION_RETIRE_MAX ) ) {
+    FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_blocked_migrations, 1UL );
+    return 0;
+  }
+
+  if( promote ) {
+    ulong used = FD_VOLATILE_CONST( accdb->shmem->hot_used );
+    if( FD_UNLIKELY( used+cnt>accdb->shmem->hot_max-accdb->shmem->hot_emergency_reserve ) ) return 0;
+  }
+
+  ulong allocated = 0UL;
+  for( ; allocated<cnt; allocated++ ) {
+    dst[ allocated ] = acc_ref_acquire( accdb, dst_hot, 0 );
+    if( FD_UNLIKELY( fd_accdb_acc_ref_is_null( dst[ allocated ] ) ) ) break;
+    *acc_ref_meta( accdb, dst[ allocated ] ) = *acc_ref_meta( accdb, src[ allocated ] );
+  }
+  if( FD_UNLIKELY( allocated<cnt ) ) {
+    while( allocated ) acc_ref_release( accdb, dst[ --allocated ] );
+    return 0;
+  }
+
+  fd_accdb_index_stripe_t * stripe = index_stripe( accdb, pubkey );
+  index_stripe_lock( stripe );
+
+  fd_accdb_acc_ref_t check[ max_versions ];
+  fd_accdb_acc_ref_t dst_check[ max_versions ];
+  ulong check_cnt = index_collect_bundle( accdb, src_hot, pubkey, check, max_versions );
+  ulong dst_cnt   = index_collect_bundle( accdb, dst_hot, pubkey, dst_check, max_versions );
+  int valid = check_cnt==cnt && !dst_cnt;
+  for( ulong i=0UL; valid && i<cnt; i++ ) valid &= check[ i ]==src[ i ];
+
+  /* Re-copy while publication is excluded.  The optimistic copy above
+     prefaults destination pages; this copy captures any compaction
+     offset update or cache-binding change that completed before we
+     acquired the stripe. */
+  if( valid ) for( ulong i=0UL; i<cnt; i++ ) *acc_ref_meta( accdb, dst[ i ] ) = *acc_ref_meta( accdb, src[ i ] );
+
+  ulong claimed_cnt = 0UL;
+  if( valid ) {
+    for( ulong i=0UL; i<cnt; i++ ) {
+      fd_accdb_accmeta_t * sm = acc_ref_meta( accdb, src[ i ] );
+      fd_accdb_accmeta_t * dm = acc_ref_meta( accdb, dst[ i ] );
+      uint es = FD_VOLATILE_CONST( sm->executable_size );
+      if( FD_UNLIKELY( es & FD_ACCDB_SIZE_CACHE_CLAIM_BIT ) ) { valid=0; break; }
+      if( !FD_ACCDB_SIZE_CACHE_VALID( es ) ) {
+        dm->cache_idx = FD_ACCDB_ACC_CIDX_INVAL;
+        dm->executable_size = es & ~FD_ACCDB_SIZE_CACHE_CLAIM_BIT;
+        continue;
+      }
+      uint cidx = FD_VOLATILE_CONST( sm->cache_idx );
+      if( cidx==FD_ACCDB_ACC_CIDX_INVAL ) {
+        dm->cache_idx = FD_ACCDB_ACC_CIDX_INVAL;
+        dm->executable_size = es & ~(FD_ACCDB_SIZE_CACHE_VALID_BIT|FD_ACCDB_SIZE_CACHE_CLAIM_BIT);
+        continue;
+      }
+      fd_accdb_cache_line_t * line = cache_line( accdb, FD_ACCDB_ACC_CIDX_CLASS(cidx), FD_ACCDB_ACC_CIDX_IDX(cidx) );
+      if( line->acc_idx!=src[ i ] || line->key.generation!=sm->key.generation || memcmp( line->key.pubkey, pubkey, 32UL ) ) {
+        dm->cache_idx = FD_ACCDB_ACC_CIDX_INVAL;
+        dm->executable_size &= ~FD_ACCDB_SIZE_CACHE_VALID_BIT;
+        continue;
+      }
+      if( FD_UNLIKELY( FD_ATOMIC_CAS( &line->refcnt, 0U, FD_ACCDB_EVICT_SENTINEL )!=0U ) ) { valid=0; break; }
+      dm->cache_idx = cidx;
+      dm->executable_size = es & ~FD_ACCDB_SIZE_CACHE_CLAIM_BIT;
+      claimed[ claimed_cnt++ ] = line;
+    }
+  }
+
+  if( FD_UNLIKELY( !valid ) ) {
+    for( ulong i=0UL; i<claimed_cnt; i++ ) FD_VOLATILE( claimed[ i ]->refcnt ) = 0U;
+    index_stripe_unlock( stripe );
+    for( ulong i=0UL; i<cnt; i++ ) acc_ref_release( accdb, dst[ i ] );
+    FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_blocked_migrations, 1UL );
+    return 0;
+  }
+
+  fd_accdb_accmeta_t * src_pool = src_hot ? accdb->acc_pool : accdb->cold_pool;
+  fd_accdb_accmeta_t * dst_pool = dst_hot ? accdb->acc_pool : accdb->cold_pool;
+  uint * src_map = src_hot ? accdb->hot_map : accdb->acc_map;
+  uint * dst_map = dst_hot ? accdb->hot_map : accdb->acc_map;
+  ulong src_hash = fd_hash32( pubkey, accdb->shmem->seed )&(acc_ref_chain_cnt( accdb, src_hot )-1UL);
+  ulong dst_hash = fd_hash32( pubkey, accdb->shmem->seed )&(acc_ref_chain_cnt( accdb, dst_hot )-1UL);
+
+  uint keep_head = UINT_MAX;
+  uint keep_tail = UINT_MAX;
+  for( uint cur=src_map[ src_hash ]; cur!=UINT_MAX; ) {
+    uint next = src_pool[ cur ].map.next;
+    if( memcmp( src_pool[ cur ].key.pubkey, pubkey, 32UL ) ) {
+      if( keep_head==UINT_MAX ) keep_head = cur;
+      else src_pool[ keep_tail ].map.next = cur;
+      keep_tail = cur;
+    }
+    cur = next;
+  }
+  if( keep_tail!=UINT_MAX ) src_pool[ keep_tail ].map.next = UINT_MAX;
+  src_map[ src_hash ] = keep_head;
+
+  uint old_dst_head = dst_map[ dst_hash ];
+  for( ulong i=0UL; i<cnt; i++ ) {
+    uint di = fd_accdb_acc_ref_idx( dst[ i ] );
+    dst_pool[ di ].map.next = i+1UL<cnt ? fd_accdb_acc_ref_idx( dst[ i+1UL ] ) : old_dst_head;
+    uint txn_plus_one = *acc_ref_txn_slot( accdb, src[ i ] );
+    *acc_ref_txn_slot( accdb, dst[ i ] ) = txn_plus_one;
+    if( dst_hot ) accdb->hot_heat[ di ] = 1U;
+    if( txn_plus_one ) txn_pool_ele( accdb->txn_pool, (ulong)(txn_plus_one-1U) )->acc_pool_idx = dst[ i ];
+  }
+  FD_COMPILER_MFENCE();
+  dst_map[ dst_hash ] = fd_accdb_acc_ref_idx( dst[ 0 ] );
+
+  for( ulong i=0UL; i<claimed_cnt; i++ ) {
+    fd_accdb_cache_line_t * line = claimed[ i ];
+    for( ulong j=0UL; j<cnt; j++ ) if( line->acc_idx==src[ j ] ) { line->acc_idx=dst[ j ]; break; }
+  }
+
+  index_stripe_unlock( stripe );
+  for( ulong i=0UL; i<claimed_cnt; i++ ) FD_VOLATILE( claimed[ i ]->refcnt ) = 0U;
+
+  FD_TEST( cnt<=FD_ACCDB_MIGRATION_RETIRE_MAX );
+  for( ulong i=0UL; i<cnt; i++ ) accdb->shmem->migration_retire[ i ] = src[ i ];
+  accdb->shmem->migration_retire_cnt = (uint)cnt;
+  accdb->shmem->migration_retire_epoch = FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->epoch, 1UL );
+  if( promote ) FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_promotions, 1UL );
+  else          FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_demotions,  1UL );
+  return 1;
+}
+
+static int
+index_dequeue_prefetch( fd_accdb_t * accdb,
+                        uchar        pubkey[ 32 ] ) {
+  if( FD_UNLIKELY( FD_ATOMIC_CAS( &accdb->shmem->prefetch_lock, 0, 1 ) ) ) return 0;
+  uint tail = accdb->shmem->prefetch_tail;
+  uint head = FD_VOLATILE_CONST( accdb->shmem->prefetch_head );
+  if( tail==head ) { spin_lock_release( &accdb->shmem->prefetch_lock ); return 0; }
+  fd_memcpy( pubkey, accdb->shmem->prefetch_key[ tail & (FD_ACCDB_PREFETCH_DEPTH-1UL) ], 32UL );
+  FD_VOLATILE( accdb->shmem->prefetch_tail ) = tail+1U;
+  spin_lock_release( &accdb->shmem->prefetch_lock );
+  return 1;
+}
+
+static int
+index_demote_clock( fd_accdb_t * accdb ) {
+  ulong buckets = accdb->shmem->hot_chain_cnt;
+  for( ulong scan=0UL; scan<64UL; scan++ ) {
+    ulong b = FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->hot_clock_hand, 1UL ) & (buckets-1UL);
+    uint head = FD_VOLATILE_CONST( accdb->hot_map[ b ] );
+    if( head==UINT_MAX ) continue;
+    uchar key[32]; fd_memcpy( key, accdb->acc_pool[ head ].key.pubkey, 32UL );
+    fd_accdb_acc_ref_t refs[ accdb->shmem->max_live_slots ];
+    ulong cnt = index_collect_bundle( accdb, 1, key, refs, accdb->shmem->max_live_slots );
+    if( !cnt || cnt==ULONG_MAX ) continue;
+    int referenced = 0;
+    for( ulong i=0UL; i<cnt; i++ ) {
+      uint idx = fd_accdb_acc_ref_idx( refs[ i ] );
+      referenced |= !!accdb->hot_heat[ idx ];
+      accdb->hot_heat[ idx ] = 0U;
+    }
+    if( referenced ) continue;
+    return index_migrate_bundle( accdb, key, 0 );
+  }
+  return 0;
 }
 
 void
@@ -4346,6 +5028,33 @@ fd_accdb_background( fd_accdb_t * accdb,
       FD_LOG_CRIT(( "corrupt snapshot_sync state %lu", snap_sync ));
     }
   }
+
+  /* Commands and snapshot synchronization take priority over index
+     policy work.  In particular, snapshot production and snapshot
+     loading require a stable index while they enumerate it. */
+  if( accdb_index_enabled( accdb ) &&
+      fd_accdb_snapshot_sync_state( snap_sync_p )==FD_ACCDB_SNAPSHOT_SYNC_IDLE &&
+      !FD_VOLATILE_CONST( shmem->snapshot_loading ) ) {
+    (void)migration_retire_drain( accdb );
+    ulong hot_limit = shmem->hot_max-shmem->hot_emergency_reserve;
+    int promotion_waiting = FD_VOLATILE_CONST( shmem->prefetch_tail )!=FD_VOLATILE_CONST( shmem->prefetch_head );
+    if( FD_VOLATILE_CONST( shmem->hot_used )>hot_limit ||
+        (promotion_waiting && FD_VOLATILE_CONST( shmem->hot_used )>=hot_limit) ) {
+      if( index_demote_clock( accdb ) ) { *charge_busy=1; return; }
+      /* Keep the promotion hint queued until CLOCK has made room.  A
+         failed sweep may merely have cleared reference bits; later
+         background passes continue from the advanced clock hand. */
+      if( promotion_waiting ) goto skip_index_prefetch;
+    }
+    uchar pubkey[32];
+    if( index_dequeue_prefetch( accdb, pubkey ) ) {
+      (void)index_migrate_bundle( accdb, pubkey, 1 );
+      *charge_busy = 1;
+      return;
+    }
+  }
+
+skip_index_prefetch:
 
   background_preevict( accdb, charge_busy, 0 );
 
@@ -4486,7 +5195,7 @@ fd_accdb_debug_clock_evict_line( fd_accdb_t * accdb,
 
   uint acc_idx = line->acc_idx;
   if( FD_LIKELY( acc_idx!=UINT_MAX ) ) {
-    evict_clear_acc_cache_ref( &accdb->acc_pool[ acc_idx ], size_class, line_idx );
+    evict_clear_acc_cache_ref( acc_ref_meta( accdb, acc_idx ), size_class, line_idx );
   }
   uint evicted_acc_idx = line->persisted ? UINT_MAX : acc_idx;
   line->key.generation = UINT_MAX;
@@ -4498,7 +5207,7 @@ fd_accdb_debug_clock_evict_line( fd_accdb_t * accdb,
      epoch the evictor holds blocks drain_deferred_frees, so the slot is
      never recycled while we are here. */
   if( FD_UNLIKELY( !line->persisted && acc_idx!=UINT_MAX ) ) {
-    fd_accdb_accmeta_t * accmeta = &accdb->acc_pool[ acc_idx ];
+    fd_accdb_accmeta_t * accmeta = acc_ref_meta( accdb, acc_idx );
     ulong entry_sz = sizeof(fd_accdb_disk_meta_t)+(ulong)FD_ACCDB_SIZE_DATA( accmeta->executable_size );
 
     ulong old_offset = fd_accdb_acc_xchg_offset( accmeta, FD_ACCDB_OFF_INVAL );

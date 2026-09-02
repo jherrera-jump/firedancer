@@ -31,16 +31,20 @@
 #define FD_SECCOMP_ARG_LO(x) ((uint)(((ulong)(uint)(int)(x)      ) & 0xffffffffUL))
 #define FD_SECCOMP_ARG_HI(x) ((uint)(((ulong)(x) >> 32) & 0xffffffffUL))
 
-static const uint sock_filter_policy_fd_execrp_tile_instr_cnt = 39;
+static const uint sock_filter_policy_fd_execrp_tile_instr_cnt = 41;
 
-static void populate_sock_filter_policy_fd_execrp_tile( ulong out_cnt, struct sock_filter out[ static 39 ], uint logfile_fd, uint accounts_fd ) {
-  FD_TEST( out_cnt >= 39 );
-  struct sock_filter filter[39] = {
+static void populate_sock_filter_policy_fd_execrp_tile( ulong out_cnt, struct sock_filter out[ static 41 ], uint logfile_fd, uint accounts_fd ) {
+  FD_TEST( out_cnt >= 41 );
+  struct sock_filter filter[41] = {
     /* validate architecture */
     BPF_STMT( BPF_LD | BPF_W | BPF_ABS, ( offsetof( struct seccomp_data, arch ) )),
-    BPF_JUMP( BPF_JMP | BPF_JEQ | BPF_K, ARCH_NR, 0, /* RET_KILL_PROCESS */ 7 ),
+    BPF_JUMP( BPF_JMP | BPF_JEQ | BPF_K, ARCH_NR, 0, /* RET_KILL_PROCESS */ 9 ),
     /* load syscall number */
     BPF_STMT( BPF_LD | BPF_W | BPF_ABS, ( offsetof( struct seccomp_data, nr ) )),
+    /* allow mmap */
+    BPF_JUMP( BPF_JMP | BPF_JEQ | BPF_K, SYS_mmap, /* RET_ALLOW */ 8, 0 ),
+    /* allow madvise */
+    BPF_JUMP( BPF_JMP | BPF_JEQ | BPF_K, SYS_madvise, /* RET_ALLOW */ 7, 0 ),
     /* check write */
     BPF_JUMP( BPF_JMP | BPF_JEQ | BPF_K, SYS_write, /* check_write */ 7, 0 ),
     /* check fsync */

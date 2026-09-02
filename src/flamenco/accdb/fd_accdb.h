@@ -16,6 +16,8 @@
 
 #define FD_ACCDB_FD_RW (123461)
 #define FD_ACCDB_FD_RO (123460)
+#define FD_ACCDB_IDX_FD_RW (123459)
+#define FD_ACCDB_IDX_FD_RO (123458)
 
 struct fd_accdb_entry {
   uchar   pubkey[ 32UL ];
@@ -41,6 +43,8 @@ struct fd_accdb_entry {
   ushort  _fork_id;
   uint    _generation;
   ulong   _acc_map_idx;
+  uint    _acc_ref;
+  uint    _reserved_acc_ref;
 
   ulong   _original_size_class;
   ulong   _original_cache_idx;
@@ -63,6 +67,9 @@ fd_accdb_footprint( ulong max_live_slots );
 /* fd_accdb_new constructs the local joiner state for an accdb writer
    (or compaction tile).  fd is an O_RDWR fd of the on-disk file.
 
+   index_fd is an O_RDWR descriptor for the mmap-backed cold index when
+   the disjoint index is enabled, and may be -1 in legacy mode.
+
    external_epoch_cnt and external_epoch_slots provide a list of
    additional epoch publish slots to scan during compaction's
    deferred-free reclamation.  These point at memory owned by other
@@ -83,6 +90,7 @@ void *
 fd_accdb_new( void *              ljoin,
               fd_accdb_shmem_t *  shmem,
               int                 fd,
+              int                 index_fd,
               ulong               external_epoch_cnt,
               ulong const **      external_epoch_slots );
 
@@ -96,6 +104,9 @@ fd_accdb_join( void * shaccdb );
    (typically a private per-tile fseq that the accdb tile maps read-only
    and passes through external_epoch_slots[] in fd_accdb_new).  fd_ro
    must be opened O_RDONLY on the same file the writer joiner opened RW.
+   index_fd_ro is the corresponding O_RDONLY descriptor for the cold
+   index file when the disjoint index is enabled, and may be -1 in
+   legacy mode.
 
    The joiner publishes its current epoch into *my_epoch_slot_rw on
    entry to each epoch-protected operation (and resets to ULONG_MAX on
@@ -111,7 +122,16 @@ fd_accdb_t *
 fd_accdb_join_readonly( void *             ljoin,
                         fd_accdb_shmem_t * shmem_ro,
                         ulong *            my_epoch_slot_rw,
-                        int                fd_ro );
+                        int                fd_ro,
+                        int                index_fd_ro );
+
+/* fd_accdb_prefetch submits best-effort promotion hints.  It never
+   blocks on queue capacity and returns the number of hints accepted. */
+
+ulong
+fd_accdb_prefetch( fd_accdb_t *          accdb,
+                   ulong                 pubkey_cnt,
+                   uchar const * const * pubkeys );
 
 /* fd_accdb_snapshot_load_{begin,end} toggle a mode on this writer
    joiner that causes layer-0 partition handoffs to backfill tiering

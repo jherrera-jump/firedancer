@@ -4,12 +4,14 @@
 #include "fd_accdb_cache.h"
 #include "fd_accdb_private.h"
 #include "../../util/fd_util.h"
+#include "../../util/fd_hash32.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 
 static uchar pubkey0[ 32UL ]  = { 0 };
 static uchar pubkey1[ 32UL ]  = { 1, 0 };
@@ -64,7 +66,7 @@ test_setup_ex( int * out_fd,
   FD_TEST( accdb_fp );
   void * accdb_mem = aligned_alloc( fd_accdb_align(), accdb_fp );
   FD_TEST( accdb_mem );
-  fd_accdb_t * accdb = fd_accdb_join( fd_accdb_new( accdb_mem, shmem, fd, 0UL, NULL ) );
+  fd_accdb_t * accdb = fd_accdb_join( fd_accdb_new( accdb_mem, shmem, fd, -1, 0UL, NULL ) );
   FD_TEST( accdb );
   return accdb;
 }
@@ -81,11 +83,52 @@ test_setup( int * out_fd,
 }
 
 static fd_accdb_t *
+test_setup_poc( int * out_fd,
+                ulong max_accounts,
+                ulong max_live_slots,
+                ulong max_account_writes_per_slot ) {
+  int fd = memfd_create( "accdb_test", 0 );
+  FD_TEST( fd>=0 );
+  *out_fd = fd;
+
+  int idx_fd = memfd_create( "accdb_index_test", 0 );
+  FD_TEST( idx_fd>=0 );
+  ulong idx_sz = fd_accdb_index_footprint( max_accounts );
+  FD_TEST( idx_sz && idx_sz<=(ulong)LONG_MAX );
+  FD_TEST( !ftruncate( idx_fd, (off_t)idx_sz ) );
+  if( idx_fd!=FD_ACCDB_IDX_FD_RW ) {
+    FD_TEST( dup2( idx_fd, FD_ACCDB_IDX_FD_RW )==FD_ACCDB_IDX_FD_RW );
+    close( idx_fd );
+  }
+
+  ulong shmem_fp = fd_accdb_shmem_footprint_ex( max_accounts, max_live_slots, max_account_writes_per_slot,
+                                                64UL, TEST_CACHE_FOOTPRINT, TEST_CACHE_MIN_RESERVED,
+                                                1UL, 0UL, 2UL );
+  FD_TEST( shmem_fp );
+  void * shmem_mem = aligned_alloc( fd_accdb_shmem_align(), shmem_fp );
+  FD_TEST( shmem_mem );
+  fd_accdb_shmem_t * shmem = fd_accdb_shmem_join(
+      fd_accdb_shmem_new_ex( shmem_mem, max_accounts, max_live_slots, max_account_writes_per_slot,
+                             64UL, 1UL<<30UL, TEST_CACHE_FOOTPRINT, TEST_CACHE_MIN_RESERVED,
+                             0, 42UL, 1UL, 0UL, 2UL ) );
+  FD_TEST( shmem );
+  test_shmem_mem = shmem_mem;
+
+  ulong accdb_fp = fd_accdb_footprint( max_live_slots );
+  void * accdb_mem = aligned_alloc( fd_accdb_align(), accdb_fp );
+  FD_TEST( accdb_mem );
+  fd_accdb_t * accdb = fd_accdb_join( fd_accdb_new( accdb_mem, shmem, fd, FD_ACCDB_IDX_FD_RW, 0UL, NULL ) );
+  FD_TEST( accdb );
+  return accdb;
+}
+
+static fd_accdb_t *
 test_join_writer( int fd ) {
   ulong fp = fd_accdb_footprint( test_shmem_mem->max_live_slots );
   void * mem = aligned_alloc( fd_accdb_align(), fp );
   FD_TEST( mem );
-  fd_accdb_t * accdb = fd_accdb_join( fd_accdb_new( mem, test_shmem_mem, fd, 0UL, NULL ) );
+  int index_fd = test_shmem_mem->index_hot_size_gib ? FD_ACCDB_IDX_FD_RW : -1;
+  fd_accdb_t * accdb = fd_accdb_join( fd_accdb_new( mem, test_shmem_mem, fd, index_fd, 0UL, NULL ) );
   FD_TEST( accdb );
   return accdb;
 }
@@ -96,6 +139,13 @@ test_teardown( fd_accdb_t * accdb,
   free( test_shmem_mem );
   free( accdb );
   close( fd );
+}
+
+static void
+test_teardown_poc( fd_accdb_t * accdb,
+                   int          fd ) {
+  test_teardown( accdb, fd );
+  close( FD_ACCDB_IDX_FD_RW );
 }
 
 /* Process any pending advance_root / purge command submitted to the
@@ -1761,6 +1811,143 @@ test_txn_footprint_growth( void ) {
   FD_TEST( fp_96-fp_64==32UL*(8UL+4UL) );
 }
 
+static void
+test_disjoint_index_poc( void ) {
+  ulong hot_capacity = fd_accdb_index_hot_capacity( 2UL );
+  ulong hot_chains   = fd_ulong_pow2_up( (hot_capacity>>1) + (hot_capacity&1UL) );
+  ulong policy_bytes = FD_ACCDB_INDEX_STRIPE_CNT*sizeof(fd_accdb_index_stripe_t)
+                     + FD_ACCDB_PREFETCH_DEPTH*32UL + FD_ACCDB_ADMISSION_CNT
+                     + FD_ACCDB_MIGRATION_RETIRE_MAX*sizeof(uint) + 4096UL;
+  ulong hot_bytes = hot_chains*sizeof(uint)
+                  + hot_capacity*(sizeof(fd_accdb_accmeta_t)+sizeof(uint)+sizeof(uchar))
+                  + policy_bytes;
+  FD_TEST( hot_capacity>20000000UL );
+  FD_TEST( hot_bytes<=(2UL<<30) );
+
+  int fd;
+  fd_accdb_t * accdb = test_setup_poc( &fd, 64UL, 8UL, 64UL );
+  fd_accdb_shmem_t * shmem = test_shmem_mem;
+  FD_TEST( shmem->hot_max==64UL );
+
+  struct stat st;
+  FD_TEST( !fstat( FD_ACCDB_IDX_FD_RW, &st ) );
+  FD_TEST( (ulong)st.st_size==fd_accdb_index_footprint( 64UL ) );
+  FD_TEST( (ulong)st.st_blocks*512UL<(ulong)st.st_size );
+
+  void * cold_mapping = mmap( NULL, shmem->cold_idx_file_sz, PROT_READ|PROT_WRITE,
+                              MAP_SHARED, FD_ACCDB_IDX_FD_RW, 0 );
+  FD_TEST( cold_mapping!=MAP_FAILED );
+  fd_accdb_accmeta_t * cold_pool = cold_mapping;
+  uint * cold_map = (uint *)((uchar *)shmem + shmem->acc_map_off);
+  uint * hot_map  = (uint *)((uchar *)shmem + shmem->hot_map_off);
+  fd_accdb_accmeta_t * hot_pool = (fd_accdb_accmeta_t *)((uchar *)shmem + shmem->acc_pool_off);
+
+  uchar key[32] = { 0xA5U };
+  fd_accdb_fork_id_t root = fd_accdb_attach_child( accdb, SENTINEL );
+  ulong replaced_lamports = 0UL;
+
+  fd_accdb_snapshot_load_begin( accdb );
+  FD_TEST( fd_accdb_snapshot_write_one( accdb, SENTINEL, key, 10UL, 10UL, 0UL, 0, &replaced_lamports )==1 );
+  ulong cold_hash = fd_hash32( key, shmem->seed ) & (shmem->chain_cnt-1UL);
+  uint root_idx = cold_map[ cold_hash ];
+  FD_TEST( root_idx!=UINT_MAX );
+  fd_accdb_disk_meta_t root_disk = {0};
+  fd_memcpy( root_disk.pubkey, key, 32UL );
+  root_disk.size       = 0U;
+  root_disk.generation = cold_pool[ root_idx ].key.generation;
+  fd_memcpy( root_disk.owner, owner2, 32UL );
+  FD_TEST( pwrite( fd, &root_disk, sizeof(root_disk), (off_t)fd_accdb_acc_offset( &cold_pool[ root_idx ] ) )==(long)sizeof(root_disk) );
+  fd_accdb_snapshot_load_end( accdb );
+
+  fd_accdb_fork_id_t child = fd_accdb_attach_child( accdb, root );
+  fd_accdb_snapshot_load_begin( accdb );
+  FD_TEST( fd_accdb_snapshot_write_one( accdb, child, key, 11UL, 20UL, 0UL, 0, &replaced_lamports )==2 );
+  uint child_idx = cold_map[ cold_hash ];
+  FD_TEST( child_idx!=UINT_MAX && child_idx!=root_idx );
+  fd_accdb_disk_meta_t child_disk = {0};
+  fd_memcpy( child_disk.pubkey, key, 32UL );
+  child_disk.size       = 0U;
+  child_disk.generation = cold_pool[ child_idx ].key.generation;
+  fd_memcpy( child_disk.owner, owner3, 32UL );
+  FD_TEST( pwrite( fd, &child_disk, sizeof(child_disk), (off_t)fd_accdb_acc_offset( &cold_pool[ child_idx ] ) )==(long)sizeof(child_disk) );
+  fd_accdb_snapshot_load_end( accdb );
+
+  ulong lamports;
+  uchar owner[32];
+  FD_TEST( accdb_read( accdb, child, key, &lamports, NULL, NULL, owner ) );
+  FD_TEST( lamports==20UL && !memcmp( owner, owner3, 32UL ) );
+  FD_TEST( shmem->hot_used==0UL );
+
+  uchar const * keys[1] = { key };
+  FD_TEST( fd_accdb_prefetch( accdb, 1UL, keys )==1UL );
+  int charge_busy = 0;
+  fd_accdb_background( accdb, &charge_busy );
+  FD_TEST( charge_busy );
+  FD_TEST( shmem->shmetrics->index_promotions==1UL );
+  FD_TEST( shmem->hot_used==2UL );
+  FD_TEST( shmem->migration_retire_cnt==2U );
+  FD_TEST( cold_map[ cold_hash ]==UINT_MAX );
+
+  ulong hot_hash = fd_hash32( key, shmem->seed ) & (shmem->hot_chain_cnt-1UL);
+  ulong hot_versions = 0UL;
+  for( uint idx=hot_map[ hot_hash ]; idx!=UINT_MAX; idx=hot_pool[ idx ].map.next )
+    hot_versions += !memcmp( hot_pool[ idx ].key.pubkey, key, 32UL );
+  FD_TEST( hot_versions==2UL );
+
+  FD_TEST( accdb_read( accdb, child, key, &lamports, NULL, NULL, owner ) );
+  FD_TEST( lamports==20UL && !memcmp( owner, owner3, 32UL ) );
+  FD_TEST( shmem->shmetrics->index_hot_hits>0UL );
+
+  charge_busy = 0;
+  fd_accdb_background( accdb, &charge_busy );
+  FD_TEST( shmem->migration_retire_cnt==0U );
+  FD_TEST( (uint)shmem->cold_free_ver_top!=UINT_MAX );
+
+  fd_accdb_purge( accdb, child );
+  drain_background( accdb );
+  FD_TEST( accdb_read( accdb, root, key, &lamports, NULL, NULL, owner ) );
+  FD_TEST( lamports==10UL && !memcmp( owner, owner2, 32UL ) );
+
+  fd_accdb_fork_id_t child2 = fd_accdb_attach_child( accdb, root );
+  accdb_write( accdb, child2, key, 30UL, NULL, 0UL, owner3 );
+  hot_versions = 0UL;
+  for( uint idx=hot_map[ hot_hash ]; idx!=UINT_MAX; idx=hot_pool[ idx ].map.next )
+    hot_versions += !memcmp( hot_pool[ idx ].key.pubkey, key, 32UL );
+  FD_TEST( hot_versions==2UL );
+  FD_TEST( cold_map[ cold_hash ]==UINT_MAX );
+
+  /* Fill the normal hot allowance, create one cold account, and prove
+     a queued promotion drives whole-pubkey CLOCK demotion to make
+     room without consuming the writable emergency reserve. */
+  ulong hot_limit = shmem->hot_max-shmem->hot_emergency_reserve;
+  for( ulong i=shmem->hot_used; i<hot_limit; i++ ) {
+    uchar fill_key[32] = { 0xC0U };
+    memcpy( fill_key+8UL, &i, sizeof(i) );
+    accdb_write( accdb, child2, fill_key, i+1UL, NULL, 0UL, owner2 );
+  }
+  FD_TEST( shmem->hot_used==hot_limit );
+
+  uchar cold_key[32] = { 0xD0U };
+  accdb_write( accdb, child2, cold_key, 77UL, NULL, 0UL, owner3 );
+  ulong cold_key_hash = fd_hash32( cold_key, shmem->seed ) & (shmem->chain_cnt-1UL);
+  FD_TEST( cold_map[ cold_key_hash ]!=UINT_MAX );
+  uchar const * cold_keys[1] = { cold_key };
+  FD_TEST( fd_accdb_prefetch( accdb, 1UL, cold_keys )==1UL );
+
+  ulong demotions_before  = shmem->shmetrics->index_demotions;
+  ulong promotions_before = shmem->shmetrics->index_promotions;
+  for( ulong i=0UL; i<shmem->hot_chain_cnt*3UL && shmem->shmetrics->index_promotions==promotions_before; i++ ) {
+    charge_busy = 0;
+    fd_accdb_background( accdb, &charge_busy );
+  }
+  FD_TEST( shmem->shmetrics->index_demotions>demotions_before );
+  FD_TEST( shmem->shmetrics->index_promotions==promotions_before+1UL );
+  FD_TEST( cold_map[ cold_key_hash ]==UINT_MAX );
+
+  FD_TEST( !munmap( cold_mapping, shmem->cold_idx_file_sz ) );
+  test_teardown_poc( accdb, fd );
+}
+
 int
 main( int     argc,
       char ** argv ) {
@@ -1822,6 +2009,9 @@ main( int     argc,
 
   FD_LOG_NOTICE(( "test_txn_footprint_growth ..." ));
   test_txn_footprint_growth();
+
+  FD_LOG_NOTICE(( "test_disjoint_index_poc ..." ));
+  test_disjoint_index_poc();
 
   FD_LOG_NOTICE(( "test_acquire_b_refund_accounting ..." ));
   test_acquire_b_refund_accounting();
