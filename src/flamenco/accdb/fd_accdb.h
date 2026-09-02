@@ -69,6 +69,8 @@ fd_accdb_footprint( ulong max_live_slots );
 
    index_fd is an O_RDWR descriptor for the mmap-backed cold index when
    the disjoint index is enabled, and may be -1 in legacy mode.
+   index_mapping is an optional mapping created by fd_accdb_index_map
+   before entering the sandbox.  Passing NULL maps index_fd here.
 
    external_epoch_cnt and external_epoch_slots provide a list of
    additional epoch publish slots to scan during compaction's
@@ -91,6 +93,7 @@ fd_accdb_new( void *              ljoin,
               fd_accdb_shmem_t *  shmem,
               int                 fd,
               int                 index_fd,
+              void *              index_mapping,
               ulong               external_epoch_cnt,
               ulong const **      external_epoch_slots );
 
@@ -106,7 +109,8 @@ fd_accdb_join( void * shaccdb );
    must be opened O_RDONLY on the same file the writer joiner opened RW.
    index_fd_ro is the corresponding O_RDONLY descriptor for the cold
    index file when the disjoint index is enabled, and may be -1 in
-   legacy mode.
+   legacy mode.  index_mapping is an optional read-only mapping created
+   by fd_accdb_index_map before entering the sandbox.
 
    The joiner publishes its current epoch into *my_epoch_slot_rw on
    entry to each epoch-protected operation (and resets to ULONG_MAX on
@@ -123,7 +127,17 @@ fd_accdb_join_readonly( void *             ljoin,
                         fd_accdb_shmem_t * shmem_ro,
                         ulong *            my_epoch_slot_rw,
                         int                fd_ro,
-                        int                index_fd_ro );
+                        int                index_fd_ro,
+                        void *             index_mapping );
+
+/* fd_accdb_index_map maps the cold index before a tile enters its
+   sandbox.  writable selects PROT_WRITE in addition to PROT_READ.
+   Returns NULL when the legacy index is configured. */
+
+void *
+fd_accdb_index_map( fd_accdb_shmem_t const * shmem,
+                    int                      index_fd,
+                    int                      writable );
 
 /* fd_accdb_prefetch submits best-effort promotion hints.  It never
    blocks on queue capacity and returns the number of hints accepted. */

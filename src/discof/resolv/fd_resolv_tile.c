@@ -158,6 +158,7 @@ typedef struct {
   fd_banks_t * banks;
   fd_bank_t * bank;
   fd_accdb_t * accdb;
+  void *       accdb_index_mapping;
 
   fd_stashed_txn_m_t * pool;
   map_chain_t *        map_chain;
@@ -594,6 +595,10 @@ privileged_init( fd_topo_t const *      topo,
   FD_SCRATCH_ALLOC_INIT( l, scratch );
   fd_resolv_ctx_t * ctx = FD_SCRATCH_ALLOC_APPEND( l, alignof( fd_resolv_ctx_t ), sizeof( fd_resolv_ctx_t ) );
   FD_TEST( fd_rng_secure( &ctx->map_seed, sizeof(ctx->map_seed) ) );
+
+  fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( fd_topo_obj_laddr( topo, tile->resolv.accdb_obj_id ) );
+  FD_TEST( accdb_shmem );
+  ctx->accdb_index_mapping = fd_accdb_index_map( accdb_shmem, FD_ACCDB_IDX_FD_RO, 0 );
 }
 
 static void
@@ -670,7 +675,7 @@ unprivileged_init( fd_topo_t const *      topo,
   FD_TEST( accdb_shmem_ro );
   ulong * epoch_fseq = fd_fseq_join( fd_topo_obj_laddr( topo, tile->resolv.accdb_epoch_fseq_obj_id ) );
   FD_TEST( epoch_fseq );
-  ctx->accdb = fd_accdb_join_readonly( _accdb_join, accdb_shmem_ro, epoch_fseq, FD_ACCDB_FD_RO, FD_ACCDB_IDX_FD_RO );
+  ctx->accdb = fd_accdb_join_readonly( _accdb_join, accdb_shmem_ro, epoch_fseq, FD_ACCDB_FD_RO, FD_ACCDB_IDX_FD_RO, ctx->accdb_index_mapping );
   FD_TEST( ctx->accdb );
 
   ulong scratch_top = FD_SCRATCH_ALLOC_FINI( l, scratch_align() );

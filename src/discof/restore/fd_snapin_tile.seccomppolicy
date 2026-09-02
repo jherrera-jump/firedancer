@@ -7,7 +7,6 @@
 #              progress.
 uint logfile_fd, uint accounts_fd
 
-mmap
 madvise
 
 # logging: all log messages are written to a file and/or pipe

@@ -423,12 +423,21 @@ main_pid_namespace( void * _args ) {
           }
         }
 
+        int tile_uses_accdb_index    = tile_uses_accdb;
+        int tile_uses_accdb_index_ro = tile_uses_accdb_ro;
+
         /* The gui joins the accdb shmem read-only (for partition stats)
            but never reads account data from the on-disk file, so it does
            not need the accounts.db fd.  Withhold it to keep the gui at
            least privilege. */
-        if( FD_UNLIKELY( !strcmp( tile->name, "gui" ) ) ) tile_uses_accdb_ro = 0;
-        if( FD_UNLIKELY( !strcmp( tile->name, "snapmk" ) ) ) tile_uses_accdb = tile_uses_accdb_ro = 0;
+        if( FD_UNLIKELY( !strcmp( tile->name, "gui" ) ) ) tile_uses_accdb_ro = tile_uses_accdb_index_ro = 0;
+        if( FD_UNLIKELY( !strcmp( tile->name, "snapmk" ) ) ) {
+          tile_uses_accdb          = 0;
+          tile_uses_accdb_ro       = 0;
+          tile_uses_accdb_index    = 0;
+          tile_uses_accdb_index_ro = 1;
+        }
+        if( FD_UNLIKELY( !strcmp( tile->name, "snaprd" ) ) ) tile_uses_accdb_index_ro = 0;
 
         /* snapwr writes accdb pwrite()s without joining accdb shmem, so
            it needs the RW fd despite not appearing as an accdb obj user
@@ -446,9 +455,9 @@ main_pid_namespace( void * _args ) {
         }
 
         if( config->firedancer.accounts.index_hot_size_gib ) {
-          if( FD_UNLIKELY( -1==fcntl( FD_ACCDB_IDX_FD_RW, F_SETFD, tile_uses_accdb ? 0 : FD_CLOEXEC ) ) )
+          if( FD_UNLIKELY( -1==fcntl( FD_ACCDB_IDX_FD_RW, F_SETFD, tile_uses_accdb_index ? 0 : FD_CLOEXEC ) ) )
             FD_LOG_ERR(( "fcntl(F_SETFD) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
-          if( FD_UNLIKELY( -1==fcntl( FD_ACCDB_IDX_FD_RO, F_SETFD, tile_uses_accdb_ro ? 0 : FD_CLOEXEC ) ) )
+          if( FD_UNLIKELY( -1==fcntl( FD_ACCDB_IDX_FD_RO, F_SETFD, tile_uses_accdb_index_ro ? 0 : FD_CLOEXEC ) ) )
             FD_LOG_ERR(( "fcntl(F_SETFD) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
         }
 

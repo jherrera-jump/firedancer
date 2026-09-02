@@ -62,6 +62,7 @@ struct fd_execrp_tile {
   fd_banks_t *    banks;
   fd_bank_t *     bank;
   fd_accdb_t *    accdb;
+  void *          accdb_index_mapping;
   fd_txncache_t * txncache;
   fd_progcache_t  progcache[1];
 
@@ -362,6 +363,15 @@ returnable_frag( fd_execrp_tile_t *  ctx,
 extern FD_TL int fd_wksp_oom_silent;
 
 static void
+privileged_init( fd_topo_t const *      topo,
+                 fd_topo_tile_t const * tile ) {
+  fd_execrp_tile_t * ctx = fd_topo_obj_laddr( topo, tile->tile_obj_id );
+  fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( fd_topo_obj_laddr( topo, tile->execrp.accdb_obj_id ) );
+  FD_TEST( accdb_shmem );
+  ctx->accdb_index_mapping = fd_accdb_index_map( accdb_shmem, FD_ACCDB_IDX_FD_RW, 1 );
+}
+
+static void
 unprivileged_init( fd_topo_t const *      topo,
                    fd_topo_tile_t const * tile ) {
   void * scratch = fd_topo_obj_laddr( topo, tile->tile_obj_id );
@@ -414,7 +424,7 @@ unprivileged_init( fd_topo_t const *      topo,
   void * _accdb_shmem = fd_topo_obj_laddr( topo, tile->execrp.accdb_obj_id );
   fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( _accdb_shmem );
   FD_TEST( accdb_shmem );
-  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW, 0UL, NULL ) );
+  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW, ctx->accdb_index_mapping, 0UL, NULL ) );
   FD_TEST( ctx->accdb );
 
 
@@ -599,6 +609,7 @@ fd_topo_run_tile_t fd_tile_execrp = {
   .populate_allowed_fds     = populate_allowed_fds,
   .scratch_align            = scratch_align,
   .scratch_footprint        = scratch_footprint,
+  .privileged_init          = privileged_init,
   .unprivileged_init        = unprivileged_init,
   .run                      = stem_run,
 };

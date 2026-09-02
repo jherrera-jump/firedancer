@@ -50,6 +50,7 @@ bz2_free( void * opaque,
 
 struct fd_genesi_tile {
   fd_accdb_t * accdb;
+  void *       accdb_index_mapping;
 
   fd_hash_t genesis_hash[1];
 
@@ -431,6 +432,12 @@ privileged_init( fd_topo_t const *      topo,
 
   fd_memset( ctx, 0, sizeof( fd_genesi_tile_t ) );
 
+  if( FD_UNLIKELY( !tile->genesi.entrypoints_cnt ) ) {
+    fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( fd_topo_obj_laddr( topo, tile->genesi.accdb_obj_id ) );
+    FD_TEST( accdb_shmem );
+    ctx->accdb_index_mapping = fd_accdb_index_map( accdb_shmem, FD_ACCDB_IDX_FD_RW, 1 );
+  }
+
   ctx->local_genesis = 1;
   ctx->in_fd = open( tile->genesi.genesis_path, O_RDONLY|O_CLOEXEC );
   if( FD_UNLIKELY( -1==ctx->in_fd ) ) {
@@ -521,7 +528,7 @@ unprivileged_init( fd_topo_t const *      topo,
     void * _accdb_shmem = fd_topo_obj_laddr( topo, tile->genesi.accdb_obj_id );
     fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( _accdb_shmem );
     FD_TEST( accdb_shmem );
-    ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW, 0UL, NULL ) );
+    ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW, ctx->accdb_index_mapping, 0UL, NULL ) );
     FD_TEST( ctx->accdb );
   }
 

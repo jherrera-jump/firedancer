@@ -36,6 +36,7 @@ static uchar owner3[ 32UL ] = { 3, 0 };
 #define TEST_CACHE_FOOTPRINT    (32UL<<20UL)
 
 static fd_accdb_shmem_t * test_shmem_mem;
+static void *             test_index_mapping;
 
 static fd_accdb_t *
 test_setup_ex( int * out_fd,
@@ -66,7 +67,7 @@ test_setup_ex( int * out_fd,
   FD_TEST( accdb_fp );
   void * accdb_mem = aligned_alloc( fd_accdb_align(), accdb_fp );
   FD_TEST( accdb_mem );
-  fd_accdb_t * accdb = fd_accdb_join( fd_accdb_new( accdb_mem, shmem, fd, -1, 0UL, NULL ) );
+  fd_accdb_t * accdb = fd_accdb_join( fd_accdb_new( accdb_mem, shmem, fd, -1, NULL, 0UL, NULL ) );
   FD_TEST( accdb );
   return accdb;
 }
@@ -117,7 +118,9 @@ test_setup_poc( int * out_fd,
   ulong accdb_fp = fd_accdb_footprint( max_live_slots );
   void * accdb_mem = aligned_alloc( fd_accdb_align(), accdb_fp );
   FD_TEST( accdb_mem );
-  fd_accdb_t * accdb = fd_accdb_join( fd_accdb_new( accdb_mem, shmem, fd, FD_ACCDB_IDX_FD_RW, 0UL, NULL ) );
+  void * index_mapping = fd_accdb_index_map( shmem, FD_ACCDB_IDX_FD_RW, 1 );
+  test_index_mapping = index_mapping;
+  fd_accdb_t * accdb = fd_accdb_join( fd_accdb_new( accdb_mem, shmem, fd, FD_ACCDB_IDX_FD_RW, index_mapping, 0UL, NULL ) );
   FD_TEST( accdb );
   return accdb;
 }
@@ -128,7 +131,7 @@ test_join_writer( int fd ) {
   void * mem = aligned_alloc( fd_accdb_align(), fp );
   FD_TEST( mem );
   int index_fd = test_shmem_mem->index_hot_size_gib ? FD_ACCDB_IDX_FD_RW : -1;
-  fd_accdb_t * accdb = fd_accdb_join( fd_accdb_new( mem, test_shmem_mem, fd, index_fd, 0UL, NULL ) );
+  fd_accdb_t * accdb = fd_accdb_join( fd_accdb_new( mem, test_shmem_mem, fd, index_fd, NULL, 0UL, NULL ) );
   FD_TEST( accdb );
   return accdb;
 }
@@ -1834,9 +1837,8 @@ test_disjoint_index_poc( void ) {
   FD_TEST( (ulong)st.st_size==fd_accdb_index_footprint( 64UL ) );
   FD_TEST( (ulong)st.st_blocks*512UL<(ulong)st.st_size );
 
-  void * cold_mapping = mmap( NULL, shmem->cold_idx_file_sz, PROT_READ|PROT_WRITE,
-                              MAP_SHARED, FD_ACCDB_IDX_FD_RW, 0 );
-  FD_TEST( cold_mapping!=MAP_FAILED );
+  void * cold_mapping = test_index_mapping;
+  FD_TEST( cold_mapping );
   fd_accdb_accmeta_t * cold_pool = cold_mapping;
   uint * cold_map = (uint *)((uchar *)shmem + shmem->acc_map_off);
   uint * hot_map  = (uint *)((uchar *)shmem + shmem->hot_map_off);

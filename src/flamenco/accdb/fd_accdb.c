@@ -502,10 +502,28 @@ fd_accdb_footprint( ulong max_live_slots ) {
 }
 
 void *
+fd_accdb_index_map( fd_accdb_shmem_t const * shmem,
+                    int                      index_fd,
+                    int                      writable ) {
+  if( FD_UNLIKELY( !shmem ) ) FD_LOG_ERR(( "NULL shmem" ));
+  if( FD_LIKELY( !shmem->index_hot_size_gib ) ) return NULL;
+  if( FD_UNLIKELY( index_fd<0 ) ) FD_LOG_ERR(( "index_fd must be valid when the disjoint index is enabled" ));
+
+  int prot = PROT_READ | (writable ? PROT_WRITE : 0);
+  void * mapping = mmap( NULL, shmem->cold_idx_file_sz, prot, MAP_SHARED, index_fd, 0 );
+  if( FD_UNLIKELY( mapping==MAP_FAILED ) ) FD_LOG_ERR(( "mmap(accounts.db.idx%s) failed (%i-%s)",
+                                                       writable ? "" : " read-only", errno, fd_io_strerror( errno ) ));
+  if( FD_UNLIKELY( madvise( mapping, shmem->cold_idx_file_sz, MADV_RANDOM ) ) )
+    FD_LOG_ERR(( "madvise(accounts.db.idx) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+  return mapping;
+}
+
+void *
 fd_accdb_new( void *              ljoin,
               fd_accdb_shmem_t *  shmem,
               int                 fd,
               int                 index_fd,
+              void *              index_mapping,
               ulong               external_epoch_cnt,
               ulong const **      external_epoch_slots ) {
   if( FD_UNLIKELY( !ljoin ) ) {
@@ -573,12 +591,10 @@ fd_accdb_new( void *              ljoin,
   accdb->cold_pool = accdb->acc_pool;
   accdb->cold_txn_idx = NULL;
   if( shmem->index_hot_size_gib ) {
-    void * mapping = mmap( NULL, shmem->cold_idx_file_sz, PROT_READ|PROT_WRITE, MAP_SHARED, index_fd, 0 );
-    if( FD_UNLIKELY( mapping==MAP_FAILED ) ) FD_LOG_ERR(( "mmap(accounts.db.idx) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+    void * mapping = index_mapping ? index_mapping : fd_accdb_index_map( shmem, index_fd, 1 );
     accdb->cold_mapping = mapping;
     accdb->cold_pool = (fd_accdb_accmeta_t *)mapping;
     accdb->cold_txn_idx = (uint *)( (uchar *)mapping + shmem->cold_txn_idx_file_off );
-    (void)madvise( mapping, shmem->cold_idx_file_sz, MADV_RANDOM );
   }
   FD_TEST( txn_pool_join( accdb->txn_pool, shmem->txn_pool, _txn_pool_ele, txn_max ) );
   for( ulong c=0UL; c<FD_ACCDB_CACHE_CLASS_CNT; c++ ) accdb->cache[ c ] = (uchar *)shmem + shmem->cache_region_off[ c ];
@@ -977,7 +993,8 @@ fd_accdb_join_readonly( void *             ljoin,
                         fd_accdb_shmem_t * shmem,
                         ulong *            my_epoch_slot_rw,
                         int                fd_ro,
-                        int                index_fd_ro ) {
+                        int                index_fd_ro,
+                        void *             index_mapping ) {
   if( FD_UNLIKELY( !ljoin ) ) {
     FD_LOG_WARNING(( "NULL ljoin" ));
     return NULL;
@@ -1048,12 +1065,10 @@ fd_accdb_join_readonly( void *             ljoin,
   accdb->cold_pool = accdb->acc_pool;
   accdb->cold_txn_idx = NULL;
   if( shmem->index_hot_size_gib ) {
-    void * mapping = mmap( NULL, shmem->cold_idx_file_sz, PROT_READ, MAP_SHARED, index_fd_ro, 0 );
-    if( FD_UNLIKELY( mapping==MAP_FAILED ) ) FD_LOG_ERR(( "mmap(accounts.db.idx read-only) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+    void * mapping = index_mapping ? index_mapping : fd_accdb_index_map( shmem, index_fd_ro, 0 );
     accdb->cold_mapping = mapping;
     accdb->cold_pool = (fd_accdb_accmeta_t *)mapping;
     accdb->cold_txn_idx = (uint *)( (uchar *)mapping + shmem->cold_txn_idx_file_off );
-    (void)madvise( mapping, shmem->cold_idx_file_sz, MADV_RANDOM );
   }
   for( ulong c=0UL; c<FD_ACCDB_CACHE_CLASS_CNT; c++ ) accdb->cache[ c ] = (uchar *)shmem + shmem->cache_region_off[ c ];
 

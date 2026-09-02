@@ -4473,6 +4473,10 @@ privileged_init( fd_topo_t const *      topo,
     if( FD_UNLIKELY( ctx->store_disk_fd<0 ) )
       FD_LOG_ERR(( "open(%s) failed (%i-%s)", store->db_path, errno, fd_io_strerror( errno ) ));
   }
+
+  fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( fd_topo_obj_laddr( topo, tile->replay.accdb_obj_id ) );
+  FD_TEST( accdb_shmem );
+  ctx->accdb_index_mapping = fd_accdb_index_map( accdb_shmem, FD_ACCDB_IDX_FD_RW, 1 );
 }
 
 static void
@@ -4591,7 +4595,7 @@ unprivileged_init( fd_topo_t const *      topo,
   void * _accdb_shmem = fd_topo_obj_laddr( topo, tile->replay.accdb_obj_id );
   fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( _accdb_shmem );
   FD_TEST( accdb_shmem );
-  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW, 0UL, NULL ) );
+  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW, ctx->accdb_index_mapping, 0UL, NULL ) );
   FD_TEST( ctx->accdb );
 
   ctx->capture_ctx = NULL;

@@ -218,6 +218,7 @@ struct fd_snapmk {
 
   /* accdb shared memory */
   fd_accdb_shmem_t *            accdb_shmem;
+  void *                        accdb_index_mapping;
   fd_accdb_fork_shmem_t const * accdb_shfork;
   fd_accdb_fork_id_t const *    accdb_root_fork;
   ulong *                       accdb_snapshot_sync;
@@ -292,6 +293,10 @@ privileged_init( fd_topo_t const *      topo,
   ctx->snap_max      = tile->snapmk.max_full_snapshots_to_keep+
                        tile->snapmk.max_incremental_snapshots_to_keep;
   ctx->snap_idx      = UINT_MAX;
+
+  fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( fd_topo_obj_laddr( topo, tile->snapmk.accdb_obj_id ) );
+  FD_TEST( accdb_shmem );
+  ctx->accdb_index_mapping = fd_accdb_index_map( accdb_shmem, FD_ACCDB_IDX_FD_RO, 0 );
 }
 
 static ulong
@@ -300,12 +305,14 @@ populate_allowed_fds( fd_topo_t const *      topo,
                       ulong                  out_fds_cnt,
                       int *                  out_fds ) {
   fd_snapmk_t * ctx = fd_topo_obj_laddr( topo, tile->tile_obj_id );
-  if( FD_UNLIKELY( out_fds_cnt<3UL+(ulong)ctx->snap_max ) ) FD_LOG_ERR(( "out_fds_cnt %lu", out_fds_cnt ));
+  int has_idx_fd = -1!=fcntl( FD_ACCDB_IDX_FD_RO, F_GETFD );
+  if( FD_UNLIKELY( out_fds_cnt<3UL+(ulong)ctx->snap_max+(ulong)has_idx_fd ) ) FD_LOG_ERR(( "out_fds_cnt %lu", out_fds_cnt ));
   ulong out_cnt = 0UL;
   out_fds[ out_cnt++ ] = 2; /* stderr */
   if( FD_LIKELY( -1!=fd_log_private_logfile_fd() ) )
     out_fds[ out_cnt++ ] = fd_log_private_logfile_fd(); /* logfile */
   out_fds[ out_cnt++ ] = ctx->snap_dir_fd;
+  if( has_idx_fd ) out_fds[ out_cnt++ ] = FD_ACCDB_IDX_FD_RO;
   for( uint i=0U; i<ctx->snap_max; i++ )
     out_fds[ out_cnt++ ] = FD_SNAP_FD( i ); /* snapshot pool */
   return out_cnt;
@@ -382,7 +389,7 @@ unprivileged_init( fd_topo_t const *      topo,
   ctx->accdb_snapshot_sync = &accdb_shmem_ro->snapshot_sync;
   ulong * epoch_fseq = fd_fseq_join( fd_topo_obj_laddr( topo, tile->snapmk.accdb_epoch_obj_id ) );
   FD_TEST( epoch_fseq );
-  fd_backup_cache_join( ctx->acc_cache, accdb_shmem_ro, epoch_fseq );
+  fd_backup_cache_join( ctx->acc_cache, accdb_shmem_ro, epoch_fseq, ctx->accdb_index_mapping );
   {
     FD_SCRATCH_ALLOC_INIT( l, accdb_shmem_ro );
     FD_SCRATCH_ALLOC_APPEND( l, FD_ACCDB_SHMEM_ALIGN, sizeof(fd_accdb_shmem_t) );

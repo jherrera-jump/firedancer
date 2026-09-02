@@ -261,6 +261,7 @@ struct fd_tower_tile {
 
   fd_banks_t * banks;
   fd_accdb_t * accdb;
+  void *       accdb_index_mapping;
 
   /* static structures */
 
@@ -1667,6 +1668,7 @@ init_choreo( void                 * scratch,
                                                                                       _accdb_shmem,
                                                                                       FD_ACCDB_FD_RW,
                                                                                       FD_ACCDB_IDX_FD_RW,
+                                                                                      ctx->accdb_index_mapping,
                                                                                       0UL,
                                                                                       NULL ) );
   ctx->mleaders           = fd_multi_epoch_leaders_join( fd_multi_epoch_leaders_new( ctx->mleaders_mem )                                         );
@@ -1934,6 +1936,10 @@ privileged_init( fd_topo_t const *      topo,
     FD_LOG_ERR(( "scratch overflow %lu %lu %lu", scratch_top - (ulong)scratch - scratch_footprint( tile ), scratch_top, (ulong)scratch + scratch_footprint( tile ) ));
 
   FD_TEST( fd_rng_secure( &ctx->seed, sizeof(ctx->seed) ) );
+
+  fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( fd_topo_obj_laddr( topo, tile->tower.accdb_obj_id ) );
+  FD_TEST( accdb_shmem );
+  ctx->accdb_index_mapping = fd_accdb_index_map( accdb_shmem, FD_ACCDB_IDX_FD_RW, 1 );
 
   if( FD_UNLIKELY( !strcmp( tile->tower.identity_key, "" ) ) ) FD_LOG_ERR(( "missing [paths.identity_key]" ));
   ctx->identity_key[ 0 ] = *(fd_pubkey_t const *)fd_type_pun_const( fd_keyload_load( tile->tower.identity_key, /* pubkey only: */ 1 ) );

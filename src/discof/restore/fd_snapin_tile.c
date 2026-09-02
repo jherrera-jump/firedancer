@@ -110,6 +110,7 @@ struct fd_snapin_tile {
   long boot_timestamp;
 
   fd_accdb_t *    accdb;
+  void *          accdb_index_mapping;
   fd_txncache_t * txncache;
 
   fd_banks_t * banks;
@@ -1706,6 +1707,10 @@ privileged_init( fd_topo_t const *      topo,
   fd_snapin_tile_t * ctx = fd_topo_obj_laddr( topo, tile->tile_obj_id );
   memset( ctx, 0, sizeof(fd_snapin_tile_t) );
   FD_TEST( fd_rng_secure( &ctx->seed, 8UL ) );
+
+  fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( fd_topo_obj_laddr( topo, tile->snapin.accdb_obj_id ) );
+  FD_TEST( accdb_shmem );
+  ctx->accdb_index_mapping = fd_accdb_index_map( accdb_shmem, FD_ACCDB_IDX_FD_RW, 1 );
 }
 
 static inline fd_snapin_out_link_t
@@ -1749,7 +1754,7 @@ unprivileged_init( fd_topo_t const *      topo,
   void * _accdb_shmem = fd_topo_obj_laddr( topo, tile->snapin.accdb_obj_id );
   fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( _accdb_shmem );
   FD_TEST( accdb_shmem );
-  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW, 0UL, NULL ) );
+  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW, ctx->accdb_index_mapping, 0UL, NULL ) );
   FD_TEST( ctx->accdb );
 
   void * _txncache_shmem = fd_topo_obj_laddr( topo, tile->snapin.txncache_obj_id );

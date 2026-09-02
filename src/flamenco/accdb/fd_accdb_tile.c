@@ -21,6 +21,7 @@
 
 struct fd_accdb_tile_ctx {
   fd_accdb_t * accdb;
+  void *       accdb_index_mapping;
 
   fd_startup_gate_t startup_gate[1];
 
@@ -109,6 +110,10 @@ privileged_init( fd_topo_t const *      topo,
   FD_SCRATCH_ALLOC_INIT( l, scratch );
   fd_accdb_tile_ctx_t * ctx = FD_SCRATCH_ALLOC_APPEND( l, alignof( fd_accdb_tile_ctx_t ), sizeof( fd_accdb_tile_ctx_t ) );
   FD_TEST( fd_rng_secure( &ctx->seed, 8U ) );
+
+  fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( fd_topo_obj_laddr( topo, tile->accdb.accdb_obj_id ) );
+  FD_TEST( accdb_shmem );
+  ctx->accdb_index_mapping = fd_accdb_index_map( accdb_shmem, FD_ACCDB_IDX_FD_RW, 1 );
 }
 
 static void
@@ -157,7 +162,7 @@ unprivileged_init( fd_topo_t const *      topo,
     external_epoch_slots[ external_epoch_cnt++ ] = fseq;
   }
 
-  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW,
+  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW, ctx->accdb_index_mapping,
                                             external_epoch_cnt, external_epoch_slots ) );
   FD_TEST( ctx->accdb );
 

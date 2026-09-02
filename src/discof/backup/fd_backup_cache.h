@@ -78,7 +78,8 @@ fd_backup_cache_init( fd_backup_cache_t *        backup,
 fd_backup_cache_t *
 fd_backup_cache_join( fd_backup_cache_t * backup,
                       fd_accdb_shmem_t *  accdb_shmem,
-                      ulong *             epoch_fseq );
+                      ulong *             epoch_fseq,
+                      void const *        index_mapping );
 
 /* fd_backup_cache_scan yields a batch of rooted accounts found in
    cache.  Returns NULL once the scan completes. */

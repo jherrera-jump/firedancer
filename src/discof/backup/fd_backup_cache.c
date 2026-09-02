@@ -28,17 +28,16 @@ fd_backup_cache_init( fd_backup_cache_t *        backup,
 fd_backup_cache_t *
 fd_backup_cache_join( fd_backup_cache_t * backup,
                       fd_accdb_shmem_t *  accdb,
-                      ulong *             epoch_fseq ) {
+                      ulong *             epoch_fseq,
+                      void const *        index_mapping ) {
   ulong max_accounts   = accdb->max_accounts;
   uint const * _acc_map = (uint const *)((uchar const *)accdb + accdb->acc_map_off);
   fd_accdb_accmeta_t const * _hot_pool = (fd_accdb_accmeta_t const *)((uchar const *)accdb + accdb->acc_pool_off);
   uint const * _hot_map = accdb->index_hot_size_gib ? (uint const *)((uchar const *)accdb + accdb->hot_map_off) : NULL;
   fd_accdb_accmeta_t const * _acc_pool_ele = _hot_pool;
   if( accdb->index_hot_size_gib ) {
-    void * mapping = mmap( NULL, accdb->cold_idx_file_sz, PROT_READ, MAP_SHARED, FD_ACCDB_IDX_FD_RO, 0 );
-    if( FD_UNLIKELY( mapping==MAP_FAILED ) ) FD_LOG_ERR(( "mmap(accounts.db.idx read-only) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
-    if( FD_UNLIKELY( madvise( mapping, accdb->cold_idx_file_sz, MADV_RANDOM ) ) ) FD_LOG_ERR(( "madvise(accounts.db.idx) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
-    _acc_pool_ele = mapping;
+    void const * mapping = index_mapping ? index_mapping : fd_accdb_index_map( accdb, FD_ACCDB_IDX_FD_RO, 0 );
+    _acc_pool_ele = (fd_accdb_accmeta_t const *)mapping;
   }
 
   uchar const * cache[ FD_ACCDB_CACHE_CLASS_CNT ];

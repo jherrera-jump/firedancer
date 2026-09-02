@@ -333,7 +333,7 @@ main( int     argc,
   FD_TEST( writer_shmem );
   void * writer_ljoin = fd_wksp_alloc_laddr( wksp, fd_accdb_align(), fd_accdb_footprint( max_live_slots ), 1UL );
   FD_TEST( writer_ljoin );
-  fd_accdb_t * writer_accdb = fd_accdb_join( fd_accdb_new( writer_ljoin, writer_shmem, accdb_data_fd, -1, 0UL, NULL ) );
+  fd_accdb_t * writer_accdb = fd_accdb_join( fd_accdb_new( writer_ljoin, writer_shmem, accdb_data_fd, -1, NULL, 0UL, NULL ) );
   FD_TEST( writer_accdb );
 
   fd_accdb_fork_id_t test_fork_id;

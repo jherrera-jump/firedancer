@@ -40,6 +40,7 @@ struct fd_snapzp {
   fd_backup_overrun_t * overrun;
   fd_backup_stats_t *   stats;
   fd_accdb_t *       accdb;
+  void *             accdb_index_mapping;
   fd_accdb_fork_id_t fork_id;
 
   /* compression buffer */
@@ -123,7 +124,13 @@ scratch_footprint( fd_topo_tile_t const * tile ) {
 static void
 privileged_init( fd_topo_t const *      topo,
                  fd_topo_tile_t const * tile ) {
-  (void)topo;
+  fd_snapzp_t * ctx = fd_topo_obj_laddr( topo, tile->tile_obj_id );
+  memset( ctx, 0, sizeof(fd_snapzp_t) );
+
+  fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( fd_topo_obj_laddr( topo, tile->snapzp.accdb_obj_id ) );
+  FD_TEST( accdb_shmem );
+  ctx->accdb_index_mapping = fd_accdb_index_map( accdb_shmem, FD_ACCDB_IDX_FD_RO, 0 );
+
   ulong snap_fd_max = tile->snapzp.snap_fd_cnt;
   FD_CHECK_ERR( snap_fd_max>0UL && snap_fd_max<=FD_SNAP_MAX,
                 "invalid snap_fd_max" );
@@ -145,7 +152,6 @@ unprivileged_init( fd_topo_t const *      topo,
   void *        _zstd    = FD_SCRATCH_ALLOC_APPEND( l, 32UL,                 ZSTD_estimateCStreamSize( FD_BACKUP_ZSTD_LEVEL ) );
   FD_SCRATCH_ALLOC_FINI( l, scratch_align() );
 
-  memset( ctx, 0, sizeof(fd_snapzp_t) );  /* 64 MiB-ish memset */
   ctx->snap_fd_cnt = tile->snapzp.snap_fd_cnt;
   ctx->snap_fd     = -1;
 
@@ -208,9 +214,9 @@ unprivileged_init( fd_topo_t const *      topo,
   FD_TEST( accdb_shmem_ro );
   ulong * epoch_fseq = fd_fseq_join( fd_topo_obj_laddr( topo, tile->snapzp.accdb_epoch_obj_id ) );
   FD_TEST( epoch_fseq );
-  ctx->accdb = fd_accdb_join_readonly( _accdb, accdb_shmem_ro, epoch_fseq, FD_ACCDB_FD_RO, FD_ACCDB_IDX_FD_RO );
+  ctx->accdb = fd_accdb_join_readonly( _accdb, accdb_shmem_ro, epoch_fseq, FD_ACCDB_FD_RO, FD_ACCDB_IDX_FD_RO, ctx->accdb_index_mapping );
   FD_TEST( ctx->accdb );
-  FD_TEST( fd_backup_cache_join( ctx->acc_cache, accdb_shmem_ro, epoch_fseq ) );
+  FD_TEST( fd_backup_cache_join( ctx->acc_cache, accdb_shmem_ro, epoch_fseq, ctx->accdb_index_mapping ) );
   ctx->overrun = fd_backup_overrun( fd_topo_obj_laddr( topo, tile->snapzp.visited_set_obj_id ) );
   ctx->stats   = fd_backup_stats  ( fd_topo_obj_laddr( topo, tile->snapzp.visited_set_obj_id ) );
   FD_TEST( ctx->overrun );

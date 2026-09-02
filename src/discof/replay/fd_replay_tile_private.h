@@ -149,6 +149,7 @@ struct fd_replay_tile {
   fd_wksp_mon_t       progcache_wksp_mon[1];
 
   fd_accdb_t *    accdb;
+  void *          accdb_index_mapping;
   fd_txncache_t * txncache;
   fd_store_t *    store;
   fd_store_map_t  map_join[1];

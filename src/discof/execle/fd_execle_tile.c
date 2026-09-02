@@ -70,6 +70,7 @@ struct fd_execle_tile {
 
   fd_banks_t * banks;
   fd_accdb_t * accdb;
+  void *       accdb_index_mapping;
 
   fd_progcache_t  progcache[1];
 
@@ -773,6 +774,10 @@ privileged_init( fd_topo_t const *      topo,
   FD_SCRATCH_ALLOC_INIT( l, scratch );
   fd_execle_tile_t * ctx = FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_execle_tile_t), sizeof(fd_execle_tile_t) );
   FD_TEST( fd_rng_secure( &ctx->rebate_seed, sizeof(ctx->rebate_seed) ) );
+
+  fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( fd_topo_obj_laddr( topo, tile->execle.accdb_obj_id ) );
+  FD_TEST( accdb_shmem );
+  ctx->accdb_index_mapping = fd_accdb_index_map( accdb_shmem, FD_ACCDB_IDX_FD_RW, 1 );
 }
 
 static void
@@ -816,7 +821,7 @@ unprivileged_init( fd_topo_t const *      topo,
   void * _accdb_shmem = fd_topo_obj_laddr( topo, tile->execle.accdb_obj_id );
   fd_accdb_shmem_t * accdb_shmem = fd_accdb_shmem_join( _accdb_shmem );
   FD_TEST( accdb_shmem );
-  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW, 0UL, NULL ) );
+  ctx->accdb = fd_accdb_join( fd_accdb_new( _accdb, accdb_shmem, FD_ACCDB_FD_RW, FD_ACCDB_IDX_FD_RW, ctx->accdb_index_mapping, 0UL, NULL ) );
   FD_TEST( ctx->accdb );
 
   for( ulong i=0UL; i<FD_PACK_MAX_TXN_PER_BUNDLE; i++ ) {
