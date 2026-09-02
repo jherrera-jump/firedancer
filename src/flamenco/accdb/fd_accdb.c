@@ -691,6 +691,7 @@ fd_accdb_reset( fd_accdb_t * accdb ) {
     for( ulong i=0UL; i<FD_ACCDB_INDEX_STRIPE_CNT; i++ ) {
       shmem->index_stripe[ i ].lock = 0U;
       shmem->index_stripe[ i ].seq  = 0U;
+      shmem->index_stripe[ i ].writers = 0U;
     }
     fd_memset( accdb->hot_map, 0xFF, shmem->hot_chain_cnt*sizeof(uint) );
     fd_memset( accdb->hot_txn_idx, 0, shmem->hot_max*sizeof(uint) );
@@ -2927,7 +2928,10 @@ fd_accdb_acquire_inner( fd_accdb_t *          accdb,
        defer on its non-zero refcount.  The pin remains held until
        release, so the tagged reference cannot become stale while the
        caller executes. */
-    if( stripe ) spin_lock_release( (int *)&stripe->lock );
+    if( stripe ) {
+      if( writable[ i ] ) stripe->writers++;
+      spin_lock_release( (int *)&stripe->lock );
+    }
 
     if( FD_UNLIKELY( writable[ i ] ) ) {
       for( ulong j=0UL; j<FD_ACCDB_CACHE_CLASS_CNT; j++ ) destination_cache_lines[ i ][ j ] = acquire_cache_line( accdb, j, &evicted_dest_acc[ i ][ j ] );
@@ -3556,6 +3560,15 @@ release_inner( fd_accdb_t * accdb,
   for( ulong i=0UL; i<accs_cnt; i++ ) {
     if( FD_UNLIKELY( accs[ i ]._original_size_class==ULONG_MAX && !accs[ i ]._writable ) ) continue;
 
+    /* A writable acquire reserves this stripe until release.  Taking
+       the stripe before dropping the original cache pin closes the
+       last window where migration could move the existing bundle to
+       the other tier while this write still owns a slot in the old
+       tier. */
+    fd_accdb_index_stripe_t * stripe = accdb_index_enabled( accdb ) && accs[ i ]._writable
+                                       ? index_stripe( accdb, accs[ i ].pubkey ) : NULL;
+    if( stripe ) index_stripe_lock( stripe );
+
     ulong original_size_class = accs[ i ]._original_size_class;
     fd_accdb_cache_line_t * original_cache_line = accs[ i ]._original_cache_idx==ULONG_MAX ? NULL : cache_line( accdb, original_size_class, accs[ i ]._original_cache_idx );
     /* For overwrite commits, defer the refcnt decrement on
@@ -3612,6 +3625,11 @@ release_inner( fd_accdb_t * accdb,
         cache_free_push( accdb, j, destination_cache_lines[ j ] );
       }
       if( !fd_accdb_acc_ref_is_null( accs[ i ]._reserved_acc_ref ) ) acc_ref_release( accdb, accs[ i ]._reserved_acc_ref );
+      if( stripe ) {
+        FD_TEST( stripe->writers );
+        stripe->writers--;
+        index_stripe_unlock( stripe );
+      }
       continue;
     }
 
@@ -3858,8 +3876,6 @@ release_inner( fd_accdb_t * accdb,
          the old head can change acc_map[idx] between our load and
          CAS.  Multiple concurrent releases may also race on the head
          pointer — the CAS retry handles this. */
-      fd_accdb_index_stripe_t * stripe = accdb_index_enabled( accdb ) ? index_stripe( accdb, accs[ i ].pubkey ) : NULL;
-      if( stripe ) index_stripe_lock( stripe );
       for(;;) {
         uint * map = hot ? accdb->hot_map : accdb->acc_map;
         uint old_head = FD_VOLATILE_CONST( map[ accs[ i ]._acc_map_idx ] );
@@ -3905,9 +3921,13 @@ release_inner( fd_accdb_t * accdb,
         FD_SPIN_PAUSE();
       }
 
-      if( stripe ) index_stripe_unlock( stripe );
-
       FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->accounts_total, 1UL );
+    }
+
+    if( stripe ) {
+      FD_TEST( stripe->writers );
+      stripe->writers--;
+      index_stripe_unlock( stripe );
     }
   }
 
@@ -4883,7 +4903,7 @@ index_migrate_bundle( fd_accdb_t * accdb,
   fd_accdb_acc_ref_t dst_check[ max_versions ];
   ulong check_cnt = index_collect_bundle( accdb, src_hot, pubkey, check, max_versions );
   ulong dst_cnt   = index_collect_bundle( accdb, dst_hot, pubkey, dst_check, max_versions );
-  int valid = check_cnt==cnt && !dst_cnt;
+  int valid = !stripe->writers && check_cnt==cnt && !dst_cnt;
   for( ulong i=0UL; valid && i<cnt; i++ ) valid &= check[ i ]==src[ i ];
 
   /* Re-copy while publication is excluded.  The optimistic copy above

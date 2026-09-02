@@ -392,7 +392,8 @@ packed_partition_file_offset( accdb_offset_t const * offset,
 struct __attribute__((aligned(64))) fd_accdb_index_stripe {
   uint lock;
   uint seq;
-  uchar pad[ 56UL ];
+  uint writers;
+  uchar pad[ 52UL ];
 };
 
 typedef struct fd_accdb_index_stripe fd_accdb_index_stripe_t;
