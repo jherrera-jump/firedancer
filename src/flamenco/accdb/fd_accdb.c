@@ -337,6 +337,14 @@ prefetch_admit_cold( fd_accdb_t * accdb,
   }
 }
 
+static inline void
+index_retry_count( fd_accdb_t * accdb ) {
+  /* Read-only joins map accdb shmem PROT_READ.  Their only writable
+     shared location is the separately mapped epoch slot. */
+  if( FD_LIKELY( !accdb->readonly ) )
+    FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_retries, 1UL );
+}
+
 /* Locate the visible version for one acquire request and return the
    migration sequence under which it was observed.  A matching pubkey in
    hot storage makes that tier authoritative even when none of its fork
@@ -408,7 +416,7 @@ index_lookup_acquire( fd_accdb_t *          accdb,
 
     FD_COMPILER_MFENCE();
     if( FD_UNLIKELY( stripe && FD_VOLATILE_CONST( stripe->seq )!=seq ) ) {
-      FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_retries, 1UL );
+      index_retry_count( accdb );
       continue;
     }
 
@@ -4056,7 +4064,7 @@ acc_lookup_visible( fd_accdb_t *        accdb,
 
     FD_COMPILER_MFENCE();
     if( FD_UNLIKELY( stripe && FD_VOLATILE_CONST( stripe->seq )!=seq ) ) {
-      FD_ATOMIC_FETCH_AND_ADD( &accdb->shmem->shmetrics->index_retries, 1UL );
+      index_retry_count( accdb );
       continue;
     }
     *out_ref = ref;
