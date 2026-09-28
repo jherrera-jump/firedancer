@@ -405,9 +405,16 @@ test_ts_append_scan( void ) {
   fd_gui_store_ts_scan_next( it );
   FD_TEST( fd_gui_store_ts_scan_done( it ) );
   fd_gui_store_ts_scan_end( it );
+  /* The index is the only source of truth: a window more than
+     FD_GUI_STORE_TS_IDX_DEPTH-1 older than the newest is clamped away,
+     even though its record is still in the ring, and a wide range is
+     clamped to the horizon instead of scanning the ring. */
   fd_gui_store_ts_scan_begin( db, it, DB_TS, low_window, low_window, NULL, NULL );
+  FD_TEST( fd_gui_store_ts_scan_done( it ) );
+  fd_gui_store_ts_scan_end( it );
+  fd_gui_store_ts_scan_begin( db, it, DB_TS, 0UL, ULONG_MAX, NULL, NULL );
   FD_TEST( !fd_gui_store_ts_scan_done( it ) );
-  FD_TEST( it->window==low_window && ((ts_val_t const *)it->rec)->seq==low.seq );
+  FD_TEST( it->window==high_window && ((ts_val_t const *)it->rec)->seq==high.seq );
   fd_gui_store_ts_scan_next( it );
   FD_TEST( fd_gui_store_ts_scan_done( it ) );
   fd_gui_store_ts_scan_end( it );
